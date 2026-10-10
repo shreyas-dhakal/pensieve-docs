@@ -147,3 +147,15 @@ def test_heading_words_and_own_titles_are_not_concepts(graph):
     assert "economics" not in labels  # "## Economics" heading only
     assert "battery storage economics" not in labels  # only the memo's own title
     assert "battery storage" in labels  # a note's title too, but used across 4 docs
+
+
+def test_node_ids_never_collide(tmp_path):
+    # section "Control" of mosquito.md once took the id of mosquito-control.md and overwrote it
+    (tmp_path / "mosquito.md").write_text("# Mosquito\n\n## Control\n\nNets and repellent.\n")
+    (tmp_path / "mosquito-control.md").write_text("# Mosquito control\n\nNets.\n")
+    (tmp_path / "concept-notes.md").write_text("# Notes\n\nNets.\n")
+    build(tmp_path, config.load(), tmp_path / "out")
+    g = json.loads((tmp_path / "out" / "graph.json").read_text())
+    docs = [n for n in g["nodes"] if n["kind"] == "document"]
+    assert len(docs) == 3
+    assert len({n["id"] for n in g["nodes"]}) == len(g["nodes"])

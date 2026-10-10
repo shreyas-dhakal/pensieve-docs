@@ -13,9 +13,9 @@ from collections import Counter
 
 from .parse import REFLINE, is_ref_heading
 
-VERSION = 4  # bump when extraction output changes, to invalidate the per-file cache
+VERSION = 6  # bump when extraction output changes, to invalidate the per-file cache
 SKIP_ENTS = {"CARDINAL", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY", "ORDINAL"}
-_EDGE_POS = {"DET", "PRON", "ADP", "CCONJ", "PUNCT", "NUM", "PART", "SYM", "SPACE"}
+_EDGE_POS = {"DET", "PRON", "ADP", "CCONJ", "PUNCT", "NUM", "PART", "SYM", "SPACE", "ADV"}
 _CLEAN = [
     (re.compile(r"!?\[([^\]]*)\]\([^)]*\)"), r"\1"),  # [text](url) -> text
     (re.compile(r"\[\[[^\]]*\]\]"), " "),  # [[wikilinks]] are links, not prose
@@ -46,7 +46,7 @@ def _norm(span, max_tokens: int, stop: set) -> tuple[str, str] | None:
         return None
     ws = [t.whitespace_ and " " for t in toks[:-1]] + [""]  # keep "lithium-ion" hyphenation
     norm = "".join((t.lemma_ if t.pos_ != "PROPN" else t.text).lower() + w for t, w in zip(toks, ws))
-    if len(norm) < 3 or norm in stop:
+    if len(norm) < 3 or norm in stop or any(ch in norm for ch in "\\{}%=^_|<>"):  # math / markup, not prose
         return None
     return norm, "".join(t.text + w for t, w in zip(toks, ws))
 

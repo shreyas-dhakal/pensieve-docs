@@ -5,3 +5,4 @@ __pycache__/
 pensieve-out/
 .archify/
 .DS_Store
+bench/data/

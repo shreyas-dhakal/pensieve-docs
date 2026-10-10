@@ -10,7 +10,7 @@ page is 1-based for PDFs, line is 1-based (paragraph number for docx), offset is
 import re
 from pathlib import Path
 
-VERSION = 1  # bump to invalidate cached parses
+VERSION = 2  # bump to invalidate cached parses
 
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 SETEXT = re.compile(r"^(=+|-+)\s*$")
@@ -19,7 +19,7 @@ WIKI = re.compile(r"\[\[([^\]|#]+)")
 URL = re.compile(r"https?://[^\s)<>\]\"']+")
 DOI = re.compile(r"\b10\.\d{4,9}/[^\s\"<>)\]]+")
 REFLINE = re.compile(r"^\s*\[(\d+)\]\s+\S")
-REF_HEADINGS = {"references", "bibliography", "works cited", "citations", "sources", "further reading"}
+REF_HEADINGS = {"references", "bibliography", "works cited", "citations", "sources", "further reading", "see also", "external links"}
 
 
 class SkipFile(Exception):

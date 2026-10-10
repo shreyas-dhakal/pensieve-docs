@@ -142,7 +142,7 @@ Every edge carries these fields:
 | `weight` | the raw TF-IDF, PMI or cosine value, or 1 |
 | `source_file`, `chunk`, `source_location` | where the edge came from: `p3` is a PDF page, `L12` a line, `¶5` a docx paragraph |
 
-Node IDs follow graphify's convention: the path relative to the folder, without its extension, lowercased, with each run of non-alphanumeric characters replaced by `_`. Concepts are `concept_<norm>` and folders `folder_<path>`. Nodes, links and keys are sorted, so two builds of the same folder give byte-identical JSON apart from `built_at`.
+Node IDs follow graphify's convention: the path relative to the folder, without its extension, lowercased, with each run of non-alphanumeric characters replaced by `_`. Concepts are `concept_<norm>`, folders `folder_<path>` and sections `<doc id>#<heading>`. A document whose ID would start with `concept_` or `folder_` gets a `doc_` prefix, so IDs never collide. Nodes, links and keys are sorted, so two builds of the same folder give byte-identical JSON apart from `built_at`.
 
 ## Extending
 
@@ -157,6 +157,27 @@ Concept extraction is pluggable. `concepts.extractors` is a list of `"module:fun
 Results from all extractors are summed and cached with the file, so an extractor must give the same output for the same file.
 
 There is also an `enrich = ["module:function"]` hook, called as `fn(graph, cfg)` after the graph is built and before clustering. Nothing uses it yet. `graph.nodes`, `graph.edges` and `graph.hyperedges` are plain dicts, and `graph.edge(...)` applies the tier rules. An LLM enricher could use it to add typed relations between the top nodes as INFERRED or AMBIGUOUS edges with provenance. It is empty by default, so builds stay offline unless you configure one.
+
+## Benchmark
+
+`bench/` scores the graph against a labelled corpus: 60 Wikipedia articles in six topics (malaria and mosquitoes, home energy, machine learning, coffee, Roman history, jazz). The articles are CC BY-SA, so they are downloaded rather than committed.
+
+```bash
+uv run python bench/fetch_wiki.py   # ~2.6 MB into bench/data/wiki, with each article's topic and the links between them
+uv run python bench/eval.py         # builds the graph and scores it
+```
+
+It reports whether communities match topics, and whether each article's top 3 related articles (ranked by shared concepts, the way a "you might want this" suggestion would be) share its topic or are linked from it on Wikipedia. Current numbers:
+
+| | |
+| --- | --- |
+| build time | 46 s cold, 6 s cached |
+| top-3 related articles in the same topic | 98% |
+| top-3 related articles that Wikipedia links to | 83% |
+| communities | 16 for 6 topics; each is one topic (purity 1.00), and topics split into subtopics such as mosquitoes and malaria |
+| score cut-off 0.2 | keeps 66% of suggestions, all of them on topic |
+
+Six unrelated topics make this an easy test. The weak spots are generic words that survive as concepts (`technique`, `output`, `characteristics`).
 
 ## Known limits
 

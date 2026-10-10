@@ -8,6 +8,7 @@ import math
 import os
 import posixpath
 import re
+import string
 from collections import Counter, defaultdict
 from itertools import combinations
 from pathlib import PurePosixPath
@@ -73,7 +74,9 @@ def build(records: list[dict], root_name: str, cfg: dict) -> Graph:
 def _doc_ids(rels: list[str]) -> dict[str, str]:
     ids = {r: slug(str(PurePosixPath(r).with_suffix(""))) for r in rels}
     dupes = {v for v, k in Counter(ids.values()).items() if k > 1}
-    return {r: slug(r) if v in dupes else v for r, v in ids.items()}  # a.md + a.txt -> keep extension
+    ids = {r: slug(r) if v in dupes else v for r, v in ids.items()}  # a.md + a.txt -> keep extension
+    # concept-notes.md must not take concept "notes"'s id
+    return {r: "doc_" + v if v.startswith(("concept_", "folder_")) else v for r, v in ids.items()}
 
 
 # ---------- EXTRACTED: folders, documents, sections ----------
@@ -103,7 +106,7 @@ def _structure(g: Graph, records, doc_ids, root_name):
         for i, c in enumerate(p["chunks"]):
             if not c["heading"] or c.get("cont"):
                 continue
-            sid = f"{did}_{slug(c['heading'])}"
+            sid = f"{did}#{slug(c['heading'])}"  # "#": slugs never contain it, so no clash with a doc id
             seen[sid] += 1
             if seen[sid] > 1:
                 sid += f"_{seen[sid]}"
@@ -203,25 +206,50 @@ def _generic(t: str, zipf: float) -> bool:
     return zipf > 0 and min(zipf_frequency(w, "en") for w in t.split()) >= zipf
 
 
+_WORD = re.compile(r"[^\s-]+")  # words split on whitespace and hyphens: "lithium-ion" == "lithium ion"
+_PUNCT = string.punctuation + "\u201c\u201d\u2018\u2019\u2026"
+
+
+def _words(text: str) -> list[tuple[str, bool]]:
+    """Lowercased words, each with whether a phrase must break before it (punctuation in between)."""
+    out, brk = [], True
+    for m in _WORD.finditer(text.lower()):
+        w = m.group()
+        core = w.strip(_PUNCT)
+        if not core:
+            brk = True
+            continue
+        out.append((core, brk or not w.startswith(core)))
+        brk = not w.endswith(core)
+    return out
+
+
 def _backfill(records) -> list[dict]:
     """Count every known term wherever its text appears, not only where spaCy happened to chunk it.
     Longest match wins, so "net metering export rate" does not also count as "net metering"."""
-    key = lambda s: re.sub(r"[\s-]+", " ", s.lower()).strip()
     forms = {}
     for r in records:
         for t, surf in r["concepts"]["labels"].items():
             for s in (t, *surf):
-                forms.setdefault(key(s), t)
+                if k := tuple(w for w, _ in _words(s)):
+                    forms.setdefault(k, t)
     if not forms:
         return records
-    # ponytail: one alternation regex over all surface forms; fine to ~10k terms, Aho-Corasick past that
-    alts = (r"[\s-]+".join(map(re.escape, f.split(" "))) for f in sorted(forms, key=len, reverse=True))
-    rx = re.compile(r"(?<![\w-])(?:" + "|".join(alts) + r")(?![\w-])", re.I)
+    maxn = max(map(len, forms))
     out = []
     for r in records:
         terms = []
         for ch, old in zip(r["parsed"]["chunks"], r["concepts"]["terms"]):
-            found = Counter(forms[key(m.group(0))] for m in rx.finditer(clean(ch)))
+            ws, found, i = _words(clean(ch)), Counter(), 0
+            while i < len(ws):
+                for n in range(min(maxn, len(ws) - i), 0, -1):
+                    k = tuple(w for w, _ in ws[i:i + n])
+                    if k in forms and not any(b for _, b in ws[i + 1:i + n]):
+                        found[forms[k]] += 1
+                        i += n
+                        break
+                else:
+                    i += 1
             terms.append({t: max(old.get(t, 0), found[t]) for t in old.keys() | found.keys()})
         out.append({**r, "concepts": {**r["concepts"], "terms": terms}})
     return out
