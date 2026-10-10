@@ -207,11 +207,15 @@ def _refs(chunks: list[dict]) -> list[dict]:
             refs.append({"kind": "url", "target": m.group(0).rstrip(".,;:"), "chunk": i})
         for m in DOI.finditer(t):
             refs.append({"kind": "doi", "target": _clean_doi(m.group(0)), "chunk": i})
-        in_refs = (c["heading"] or "").strip().lower().lstrip("0123456789. ") in REF_HEADINGS
+        in_refs = is_ref_heading(c["heading"])
         for line in t.splitlines():
             if (in_refs and line.strip()) or REFLINE.match(line):
                 refs.append({"kind": "reference", "target": line.strip().lstrip("-*• ").strip(), "chunk": i})
     return refs
+
+
+def is_ref_heading(heading: str | None) -> bool:
+    return (heading or "").strip().lower().lstrip("0123456789. ") in REF_HEADINGS
 
 
 def _clean_doi(d: str) -> str:

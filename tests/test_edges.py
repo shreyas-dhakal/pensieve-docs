@@ -133,3 +133,10 @@ def test_pagerank_matches_networkx():
         G[u][v]["weight"] = random.random()
     ours, ref = pagerank(G), _pagerank_python(G, weight="weight", tol=1e-12, max_iter=500)
     assert max(abs(ours[n] - ref[n]) for n in G) < 1e-8
+
+
+def test_reference_lists_are_not_mined_for_concepts(graph):
+    # "[1] Battery Storage Economics, internal memo." becomes a cites edge, not a concept
+    labels = {n["label"].lower() for n in graph["nodes"] if n["kind"] == "concept"}
+    assert "internal memo" not in labels and "residential solar" not in labels
+    assert ("notes_battery_storage", "papers_battery_economics") in _edges(graph, "cites")

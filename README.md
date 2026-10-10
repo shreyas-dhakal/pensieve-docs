@@ -16,7 +16,7 @@ You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 git clone https://github.com/shreyas-dhakal/pensieve-docs
 cd pensieve-docs
 uv sync                 # installs dependencies, including the spaCy en_core_web_sm model (one-time download)
-uv run pytest -q        # 18 tests: parsing, edge tiers, incremental rebuild, no network
+uv run pytest -q        # 19 tests: parsing, edge tiers, incremental rebuild, no network
 ```
 
 For MiniLM document similarity instead of TF-IDF, run `uv sync --extra embeddings`, download the model once while online
@@ -51,20 +51,20 @@ The viewer only reads. Rerun `build` and reload the page to see changes.
 ```
 $ uv run pensieve-docs build examples/sample
 WARNING skip scans/scanned-invoice.pdf: no text layer (scanned PDF?) - OCR is out of scope
-9 files (9 parsed, 0 cached, 2 skipped) -> 73 nodes, 214 edges, 16 hyperedges, 5 communities in 0.7s
+9 files (9 parsed, 0 cached, 2 skipped) -> 70 nodes, 201 edges, 14 hyperedges, 6 communities in 0.9s
 wrote pensieve-out/graph.json and GRAPH_REPORT.md
 
 $ uv run pensieve-docs build examples/sample        # nothing changed, so everything comes from the cache
-9 files (0 parsed, 9 cached, 2 skipped) -> 73 nodes, 214 edges, 16 hyperedges, 5 communities in 0.1s
+9 files (0 parsed, 9 cached, 2 skipped) -> 70 nodes, 201 edges, 14 hyperedges, 6 communities in 0.1s
 ```
 
 Part of the generated `GRAPH_REPORT.md`:
 
 | # | name | size | docs | cohesion | top documents |
 | ---: | --- | ---: | ---: | ---: | --- |
-| 1 | heat pump / electricity consumption / coefficient of performance | 16 | 2 | 0.465 | Kickoff meeting, May 2024, Heat Pumps |
-| 2 | inverter / Rooftop solar / solar panels | 15 | 2 | 0.377 | Solar Basics, Home Energy Retrofit |
-| 3 | home battery / lithium-ion battery / utility company | 13 | 1 | 0.395 | Review meeting, June 2024 |
+| 0 | home battery / lithium-ion battery / battery storage | 18 | 1 | 0.484 | Review meeting, June 2024 |
+| 1 | heat pump / electricity consumption / coefficient of performance | 15 | 2 | 0.463 | Kickoff meeting, May 2024, Heat Pumps |
+| 2 | inverter / Rooftop solar / solar panels | 14 | 2 | 0.365 | Solar Basics, Home Energy Retrofit |
 
 | from | relation | to | confidence | provenance |
 | --- | --- | --- | ---: | --- |
@@ -81,7 +81,7 @@ The `.docx` to PDF citation came from a DOI hyperlink in the memo that matches t
 | --- | --- | --- |
 | Detect | `detect.py` | Walks the folder, skipping hidden and excluded directories, and sorts files into supported and skipped. |
 | Parse | `parse.py` | Markdown and text: ATX and setext headings, frontmatter title, links, wikilinks. DOCX: heading styles and hyperlinks. PDF: text layer, outline as sections, link annotations. All types: URLs, DOIs, `[n]` references and References sections. Text is chunked by section, long sections are split on paragraph boundaries, and each chunk keeps its page, line and character offset. PDFs with no text layer are skipped. |
-| Concepts | `concepts.py` | spaCy entities and noun chunks, lemmatised and lowercased. `X of Y` phrases are joined when they fit in `max_tokens`. Boilerplate headings are dropped. |
+| Concepts | `concepts.py` | spaCy entities and noun chunks, lemmatised and lowercased. Reference lists are skipped, since they already become `cites` edges. `X of Y` phrases are joined when they fit in `max_tokens`. Boilerplate headings are dropped. |
 | Graph | `edges.py` | Every concept found anywhere is matched again across all chunks, longest match first, so a term counts wherever its text appears. Near-duplicates are folded with difflib, and a concept with an extra modifier folds into the shorter one (`shortlisted heat pump` into `heat pump`, `net metering rules` into `net metering`). Concepts made only of everyday English words (wordfreq Zipf at or above `generic_zipf`) are dropped. Then TF-IDF concept weights, PMI co-occurrence, document similarity and hyperedges. |
 | Cluster | `analyze.py` | Louvain communities (networkx, seed 42) over the non-AMBIGUOUS edges, each named after its top concepts by PageRank. God nodes are concepts ranked by degree plus PageRank. Documents are left out of that ranking because, as graphify found for files, they collect edges mechanically. |
 | Output | `output.py` | `graph.json` and `GRAPH_REPORT.md` |
@@ -164,7 +164,7 @@ There is also an `enrich = ["module:function"]` hook, called as `fn(graph, cfg)`
 - DOCX tables, headers and footers are not read. Markdown tables are read as plain text.
 - PDFs are chunked one page at a time, with headings from the PDF outline. A PDF without an outline gets untitled page chunks.
 - Document similarity compares every pair (O(n²)). That is fine for thousands of documents; past that it needs an approximate nearest-neighbour index.
-- Concepts are only as good as `en_core_web_sm` noun chunks. Text in reference lists is currently mined for concepts too, and synonyms such as "solar panels" and "photovoltaic panels" stay separate. A larger `spacy_model` or your own extractor will do better.
+- Concepts are only as good as `en_core_web_sm` noun chunks. Short section headings ("Economics") can still become concepts, and synonyms such as "solar panels" and "photovoltaic panels" stay separate. A larger `spacy_model` or your own extractor will do better.
 
 ## License
 

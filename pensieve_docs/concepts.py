@@ -11,7 +11,9 @@ Results are cached per file, so extractors must be deterministic for a given fil
 import re
 from collections import Counter
 
-VERSION = 2  # bump when extraction output changes, to invalidate the per-file cache
+from .parse import REFLINE, is_ref_heading
+
+VERSION = 3  # bump when extraction output changes, to invalidate the per-file cache
 SKIP_ENTS = {"CARDINAL", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY", "ORDINAL"}
 _EDGE_POS = {"DET", "PRON", "ADP", "CCONJ", "PUNCT", "NUM", "PART", "SYM", "SPACE"}
 _CLEAN = [
@@ -50,8 +52,12 @@ def _norm(span, max_tokens: int, stop: set) -> tuple[str, str] | None:
 
 
 def clean(ch: dict) -> str:
-    """Chunk prose as the extractor sees it: heading + text, markup and links stripped."""
-    t = (ch["heading"] + "\n" if ch["heading"] and not ch.get("cont") else "") + ch["text"]
+    """Chunk prose as the extractor sees it: heading + text, markup and links stripped.
+    Reference lists are left out: they already become `cites` edges, and their titles are not this doc's ideas."""
+    if is_ref_heading(ch["heading"]):
+        return ""
+    body = "\n".join(line for line in ch["text"].splitlines() if not REFLINE.match(line))
+    t = (ch["heading"] + "\n" if ch["heading"] and not ch.get("cont") else "") + body
     for rx, rep in _CLEAN:
         t = rx.sub(rep, t)
     return t
