@@ -16,7 +16,7 @@ You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 git clone https://github.com/shreyas-dhakal/pensieve-docs
 cd pensieve-docs
 uv sync                 # installs dependencies, including the spaCy en_core_web_sm model (one-time download)
-uv run pytest -q        # 20 tests: parsing, edge tiers, incremental rebuild, no network
+uv run pytest -q        # 24 tests: parsing, edge tiers, incremental rebuild, no network
 ```
 
 For MiniLM document similarity instead of TF-IDF, run `uv sync --extra embeddings`, download the model once while online
@@ -30,6 +30,35 @@ uv run pensieve-docs build <folder> [--config pensieve.toml] [--out pensieve-out
 ```
 
 The graph and report go to `./pensieve-out/`, and the per-file cache to `pensieve-out/.cache/`. A `pensieve.toml` inside the folder is picked up automatically. [`config.example.toml`](config.example.toml) lists every setting with its default.
+
+## Related documents
+
+Once a folder is built, `related` finds the documents that share concepts with a file or with any text, and says why:
+
+```
+$ echo "Should we add a home battery? The payback period depends on the net metering export rate. Backup power during a grid outage matters too." | uv run pensieve-docs related -
+1.17  Review meeting, June 2024  (meetings/2024-06-review.md)
+        grid outage  [meetings/2024-06-review.md L5]
+        backup power  [meetings/2024-06-review.md L5]
+        payback period  [meetings/2024-06-review.md L5]
+0.93  Battery Storage  (notes/battery-storage.md)
+        home battery  [notes/battery-storage.md L3]
+        ...
+```
+
+Pass a file path instead of `-` to use a document's text (any supported type); a file from the indexed folder is left out of its own results. `-k`, `--min-score` and `--json` adjust the output. Matches below 0.2 are hidden by default, so unrelated text returns nothing.
+
+From Python, load the graph once and query as often as you like:
+
+```python
+from pensieve_docs.related import Index
+
+idx = Index("pensieve-out/graph.json")
+idx.related("thinking about a home battery for backup power", k=5)
+# [{"id", "label", "source_file", "score", "reasons": [{"concept", "where"}, ...]}, ...]
+```
+
+A query matches the graph's known concepts in the text (surface words and lemmas, longest match first) and scores each document by the TF-IDF weight they share. A paragraph takes a few milliseconds once the spaCy model is loaded; a 30,000-character article takes about a third of a second.
 
 ## Viewer
 
@@ -176,6 +205,7 @@ It reports whether communities match topics, and whether each article's top 3 re
 | top-3 related articles that Wikipedia links to | 83% |
 | communities | 16 for 6 topics; each is one topic (purity 1.00), and topics split into subtopics such as mosquitoes and malaria |
 | score cut-off 0.2 | keeps 66% of suggestions, all of them on topic |
+| `Index.related` with each article's full text as the query | 99% same topic, 86% linked on Wikipedia |
 
 Six unrelated topics make this an easy test. The weak spots are generic words that survive as concepts (`technique`, `output`, `characteristics`).
 

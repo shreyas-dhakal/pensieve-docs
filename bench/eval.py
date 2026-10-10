@@ -15,8 +15,16 @@ from pathlib import Path
 
 from pensieve_docs import config
 from pensieve_docs.build import build
+from pensieve_docs.parse import parse_file
+from pensieve_docs.related import Index
 
 K = 3
+
+
+def idx_threshold():
+    from pensieve_docs.related import MIN_SCORE
+
+    return MIN_SCORE
 
 
 def main(data: Path, out: Path):
@@ -78,12 +86,23 @@ def main(data: Path, out: Path):
 
     cp = precision(by_concepts)
     sp = precision(by_similarity)
+    # the real query path: each article's full text through Index.related, as the product would call it
+    idx, hits, same, link, t1 = Index(out / "graph.json"), 0, 0, 0, time.perf_counter()
+    for f in docs.values():
+        text = "\n".join(c["text"] for c in parse_file(data / f)["chunks"])
+        for h in idx.related(text, k=K, exclude=f):
+            hits += 1
+            same += topic[h["source_file"]] == topic[f]
+            link += frozenset((f, h["source_file"])) in linked
+    qms = (time.perf_counter() - t1) / len(docs) * 1000
     concepts = sorted((x for x in g["nodes"] if x["kind"] == "concept"), key=lambda x: -x["doc_count"])
 
     print(f"build: {stats['detected']} files -> {len(g['nodes'])} nodes, {len(g['links'])} edges in {secs:.1f}s")
     print(f"communities: {len(comm)} for {len(by_topic)} topics | purity {purity:.2f} | inverse purity {inverse:.2f}")
     print(f"related@{K} by concepts:  same topic {cp[0]:.0%}, wiki-linked {cp[1]:.0%} ({cp[2]} suggestions)")
     print(f"related@{K} by similar_to: same topic {sp[0]:.0%}, wiki-linked {sp[1]:.0%} ({sp[2]} suggestions)")
+    print(f"Index.related (threshold {idx_threshold()}): {hits / (K * len(docs)):.0%} of slots filled, "
+          f"same topic {same / max(hits, 1):.0%}, wiki-linked {link / max(hits, 1):.0%}, {qms:.0f} ms per query")
     for th in (0.1, 0.2, 0.3, 0.5):
         kept = [ok for s, ok in scored if s >= th]
         print(f"  badge threshold {th}: shows {len(kept) / len(scored):.0%} of suggestions, "
