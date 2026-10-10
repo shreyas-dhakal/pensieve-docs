@@ -1,0 +1,38 @@
+# Copy to <folder>/pensieve.toml (picked up automatically) or pass --config.
+# Every key is optional; anything omitted uses the default shown here.
+
+out_dir = "pensieve-out"
+exclude = [".git", "node_modules", "__pycache__", ".venv", "pensieve-out", "graphify-out"]
+hyperedge_min_docs = 3      # concepts in this many docs also get a hyperedge record
+
+[chunk]
+max_chars = 4000            # sections longer than this are split on paragraph boundaries
+
+[concepts]
+spacy_model = "en_core_web_sm"
+extractors = ["pensieve_docs.concepts:extract"]
+min_docs = 2                # keep concepts found in >= this many docs...
+keep_top_single = 3         # ...or among the top N (TF-IDF) of their own doc
+max_per_doc = 25            # MENTIONS edges per doc
+merge_ratio = 0.9           # difflib ratio for folding near-duplicate concepts
+max_tokens = 4
+generic_zipf = 4.6          # drop concepts whose every word is this common in English (wordfreq Zipf); 0 = off
+# stop_concepts = ["abstract", "introduction", ...]   # boilerplate headings to ignore
+
+[similarity]
+method = "tfidf"            # or "minilm" (needs `uv sync --extra embeddings` and a locally cached model)
+model = "sentence-transformers/all-MiniLM-L6-v2"
+top_k = 5
+threshold = 0.25            # >= threshold -> INFERRED similar_to
+ambiguous_min = 0.08        # [ambiguous_min, threshold) -> AMBIGUOUS similar_to
+
+[cooccur]
+top_k = 5
+min_count = 2               # pairs sharing fewer chunks are dropped
+npmi_threshold = 0.2        # below -> AMBIGUOUS co_occurs
+
+
+[report]
+top_n = 15
+
+# enrich = []               # future post-build hooks: "module:function" called as fn(graph, cfg)

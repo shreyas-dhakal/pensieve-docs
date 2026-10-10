@@ -1,0 +1,33 @@
+[project]
+name = "pensieve-docs"
+version = "0.1.0"
+description = "Turn a folder of documents into a queryable knowledge graph. Local-first, no LLM."
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+readme = "README.md"
+dependencies = [
+    "networkx>=3.2",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+    "spacy>=3.7,<4",
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "wordfreq>=3.1.1",
+]
+
+[project.optional-dependencies]
+embeddings = ["sentence-transformers>=2.2"]
+ui = ["nicegui>=2.0"]
+
+[project.scripts]
+pensieve-docs = "pensieve_docs.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true

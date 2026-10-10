@@ -1,0 +1,135 @@
+import json
+import socket
+from pathlib import Path
+
+import pytest
+
+from pensieve_docs import config
+from pensieve_docs.build import build
+from pensieve_docs.edges import RUBRIC, Graph
+
+SAMPLE = Path(__file__).parent.parent / "examples" / "sample"
+
+
+@pytest.fixture(scope="module")
+def graph(tmp_path_factory):
+    out = tmp_path_factory.mktemp("out")
+    build(SAMPLE, config.load(), out)
+    return json.loads((out / "graph.json").read_text())
+
+
+def _edges(g, relation):
+    return {(e["source"], e["target"]): e for e in g["links"] if e["relation"] == relation}
+
+
+def test_graphify_compatible_shape(graph):
+    assert list(graph) == ["directed", "multigraph", "graph", "nodes", "links", "hyperedges", "built_at_commit"]
+    assert graph["graph"]["hyperedges"] == graph["hyperedges"]
+    for n in graph["nodes"]:
+        assert {"id", "label", "norm_label", "file_type", "kind", "community", "community_name", "source_file"} <= n.keys()
+    docs = [n for n in graph["nodes"] if n["kind"] == "document"]
+    for d in docs:  # pointer to the file, never its content
+        assert {"hash", "mtime", "doc_type"} <= d.keys() and "text" not in d
+        assert (SAMPLE / d["source_file"]).is_file()
+
+
+def test_every_edge_has_type_weight_confidence_tier_provenance(graph):
+    for e in graph["links"]:
+        assert {"source", "target", "relation", "confidence", "confidence_score", "weight", "source_file",
+                "source_location", "chunk"} <= e.keys()
+        tier, score = e["confidence"], e["confidence_score"]
+        if tier == "EXTRACTED":
+            assert score == 1.0
+        elif tier == "INFERRED":
+            assert score in RUBRIC
+        else:
+            assert tier == "AMBIGUOUS" and 0.1 <= score <= 0.3
+        assert (SAMPLE / e["source_file"]).exists()
+    assert {e["relation"] for e in graph["links"]} == {
+        "contains", "has_section", "links_to", "cites", "mentions", "co_occurs", "similar_to", "conceptually_related_to"}
+
+
+def test_extracted_structure_links_and_citations(graph):
+    contains, links, cites = _edges(graph, "contains"), _edges(graph, "links_to"), _edges(graph, "cites")
+    assert ("folder_root", "folder_notes") in contains and ("folder_notes", "notes_solar_basics") in contains
+    assert ("index", "notes_battery_storage") in links  # markdown link
+    assert ("meetings_2024_05_kickoff", "notes_heat_pumps") in links  # [[heat-pumps]] -> .txt
+    assert ("papers_battery_economics", "papers_grid_integration") in cites  # via DOI hyperlink
+    assert ("notes_battery_storage", "papers_grid_integration") in cites  # reference-list title
+    assert ("notes_battery_storage", "papers_battery_economics") in cites  # longest title wins over "Battery Storage"
+    e = links[("index", "notes_battery_storage")]
+    assert e["confidence"] == "EXTRACTED" and e["source_file"] == "index.md" and e["source_location"].startswith("L")
+    assert all(e["confidence"] == "EXTRACTED" for e in _edges(graph, "has_section").values())
+
+
+def test_inferred_mentions_cooccur_hyperedges(graph):
+    mentions = _edges(graph, "mentions")
+    assert ("meetings_2024_06_review", "concept_home_battery") in mentions
+    cfg = config.load()
+    for e in _edges(graph, "co_occurs").values():
+        assert e["count"] >= cfg["cooccur"]["min_count"]
+        assert (e["npmi"] >= cfg["cooccur"]["npmi_threshold"]) == (e["confidence"] == "INFERRED")
+    concepts = {n["id"]: n for n in graph["nodes"] if n["kind"] == "concept"}
+    assert graph["hyperedges"]
+    for h in graph["hyperedges"]:
+        assert concepts[h["nodes"][0]]["doc_count"] >= 3 and len(h["nodes"]) >= 4
+    assert any(h["nodes"][0] == "concept_home_battery" for h in graph["hyperedges"])
+
+
+def test_similarity_threshold_and_top_k(tmp_path):
+    cfg = config.load()
+    cfg["similarity"].update(top_k=1, threshold=0.2, ambiguous_min=0.1)
+    build(SAMPLE, cfg, tmp_path)
+    g = json.loads((tmp_path / "graph.json").read_text())
+    sims = list(_edges(g, "similar_to").values())
+    assert sims and len(sims) <= sum(1 for n in g["nodes"] if n["kind"] == "document")
+    for e in sims:
+        assert (e["weight"] >= 0.2) == (e["confidence"] == "INFERRED")
+        assert e["weight"] >= 0.1
+
+
+def test_stronger_tier_wins_on_same_pair():
+    g = Graph()
+    g.edge("a", "b", "similar_to", "AMBIGUOUS", 0.2, 0.1, "x")
+    g.edge("b", "a", "links_to", "EXTRACTED", 1.0, 1.0, "x")
+    g.edge("a", "b", "similar_to", "INFERRED", 0.75, 0.5, "x")
+    assert [e["relation"] for e in g.edges.values()] == ["links_to"]
+
+
+def test_build_makes_no_network_calls(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("network call attempted")
+
+    monkeypatch.setattr(socket.socket, "connect", boom)
+    monkeypatch.setattr(socket, "create_connection", boom)
+    build(SAMPLE, config.load(), tmp_path)
+    assert (tmp_path / "graph.json").exists() and (tmp_path / "GRAPH_REPORT.md").exists()
+
+
+def test_concepts_backfilled_wherever_their_text_appears(graph):
+    # spaCy only chunks "lithium-ion battery" in 2 docs; the text is in 4
+    n = next(n for n in graph["nodes"] if n["id"] == "concept_lithium_ion_battery")
+    assert n["doc_count"] == 4
+    assert ("notes_battery_storage", n["id"]) in _edges(graph, "mentions")
+
+
+def test_nested_concepts_related(graph):
+    rel = _edges(graph, "conceptually_related_to")
+    assert ("concept_net_metering_export_rate", "concept_net_metering") in rel
+
+
+def test_pagerank_matches_networkx():
+    import random
+
+    import networkx as nx
+    from networkx.algorithms.link_analysis.pagerank_alg import _pagerank_python
+
+    from pensieve_docs.analyze import pagerank
+
+    G = nx.karate_club_graph()
+    G.add_node("isolated")
+    random.seed(1)
+    for u, v in G.edges:
+        G[u][v]["weight"] = random.random()
+    ours, ref = pagerank(G), _pagerank_python(G, weight="weight", tol=1e-12, max_iter=500)
+    assert max(abs(ours[n] - ref[n]) for n in G) < 1e-8

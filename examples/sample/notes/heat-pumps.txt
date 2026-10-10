@@ -1,0 +1,12 @@
+Heat Pumps
+==========
+
+An air-source heat pump moves heat from outside air into the house. Its efficiency is measured as the
+coefficient of performance. Insulation and draught proofing come first: a leaky house needs a larger
+heat pump and raises electricity consumption.
+
+Running costs
+-------------
+
+A heat pump runs on electricity, so cheap solar energy from rooftop solar panels lowers running costs
+in spring and autumn. In winter the heat pump draws grid electricity at the retail tariff.
