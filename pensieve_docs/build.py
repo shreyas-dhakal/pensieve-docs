@@ -98,7 +98,11 @@ def build(folder: str | Path, cfg: dict, out: str | Path | None = None) -> dict:
         _load(hook)(g, cfg)
     a = analyze.analyze(g, cfg)
 
-    stats = {"root": root.name, "detected": len(files), "parsed": parsed, "cached": cached,
+    redacted = Counter()
+    for r in records:
+        redacted.update(r["parsed"].get("redactions", {}))
+    stats = {"root": root.name, "detected": len(files), "parsed": parsed, "cached": cached, "redacted": dict(redacted),
+             "redacted_files": sum(bool(r["parsed"].get("redactions")) for r in records),
              "skipped": sorted(skipped), "seconds": time.perf_counter() - t0}
     meta = {"root": str(root), "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "built_at_commit": _git_head(root), "generator": "pensieve-docs 0.1.0",

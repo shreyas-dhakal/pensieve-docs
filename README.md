@@ -6,6 +6,8 @@ It runs on your machine. A default build makes no network calls and no LLM calls
 
 The idea comes from [graphify](https://github.com/Graphify-Labs/graphify), which does this for code using syntax trees. Documents have no syntax tree, so pensieve-docs uses a deterministic parser for structure (headings, links, DOIs, reference lists) and spaCy for concepts. The output uses graphify's `graph.json` shape, so tools that read one can read the other.
 
+Secrets and personal data are blanked out of the text as soon as a file is parsed, before anything is cached, indexed or written: passwords, API keys and tokens, private keys, card numbers, email addresses and phone numbers. Your files are not changed. The report lists how many of each were found, never the values.
+
 Supported inputs are `.md`, `.markdown`, `.txt`, `.pdf` (text layer only, no OCR) and `.docx`. Anything else is skipped and listed in the report.
 
 ## Setup
@@ -16,7 +18,7 @@ You need Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 git clone https://github.com/shreyas-dhakal/pensieve-docs
 cd pensieve-docs
 uv sync                 # installs dependencies, including the spaCy en_core_web_sm model (one-time download)
-uv run pytest -q        # 24 tests: parsing, edge tiers, incremental rebuild, no network
+uv run pytest -q        # 25 tests: parsing, edge tiers, incremental rebuild, no network
 ```
 
 For MiniLM document similarity instead of TF-IDF, run `uv sync --extra embeddings`, download the model once while online
@@ -109,6 +111,7 @@ The `.docx` to PDF citation came from a DOI hyperlink in the memo that matches t
 | Step | Module | What it does |
 | --- | --- | --- |
 | Detect | `detect.py` | Walks the folder, skipping hidden and excluded directories, and sorts files into supported and skipped. |
+| Redact | `redact.py` | Runs inside `parse_file`, before chunking. Each rule is a pattern plus a check: card numbers must pass the Luhn checksum and not be ISBNs, phone numbers need a `+`, a bracketed area code, a leading 0 or the 3-3-4 North American shape, and a `token:` value must be 16+ characters, so prose such as "token: a unit of text" is kept. On the 60 Wikipedia articles in `bench/` it blanks nothing. `python -m pensieve_docs.redact` runs a self-check. |
 | Parse | `parse.py` | Markdown and text: ATX and setext headings, frontmatter title, links, wikilinks. DOCX: heading styles and hyperlinks. PDF: text layer, outline as sections, link annotations. All types: URLs, DOIs, `[n]` references and References sections. Text is chunked by section, long sections are split on paragraph boundaries, and each chunk keeps its page, line and character offset. PDFs with no text layer are skipped. |
 | Concepts | `concepts.py` | spaCy entities and noun chunks, lemmatised and lowercased. Reference lists are skipped, since they already become `cites` edges. A one-word heading ("Economics") only counts if the body uses the word, and a term found only as its own document's title is left to the document node. `X of Y` phrases are joined when they fit in `max_tokens`. Boilerplate headings are dropped. |
 | Graph | `edges.py` | Every concept found anywhere is matched again across all chunks, longest match first, so a term counts wherever its text appears. Near-duplicates are folded with difflib, and a concept with an extra modifier folds into the shorter one (`shortlisted heat pump` into `heat pump`, `net metering rules` into `net metering`). Concepts made only of everyday English words (wordfreq Zipf at or above `generic_zipf`) are dropped. Then TF-IDF concept weights, PMI co-occurrence, document similarity and hyperedges. |
@@ -121,7 +124,7 @@ The `.docx` to PDF citation came from a DOI hyperlink in the memo that matches t
 | Node `kind` | `file_type` | Fields |
 | --- | --- | --- |
 | `folder` | `folder` | One per directory. The root is `folder_root`. |
-| `document` | `document` (`paper` for PDFs) | A pointer to the file: `source_file`, `doc_type`, `hash`, `mtime`, `size`, `n_chunks`, `doi`, `external_links`. The text itself is not stored. |
+| `document` | `document` (`paper` for PDFs) | A pointer to the file: `source_file`, `doc_type`, `hash`, `mtime`, `size`, `n_chunks`, `doi`, `external_links`, `redactions` (counts by kind). The text itself is not stored. |
 | `section` | `document` | A heading: `level`, `chunk`, `source_location` |
 | `concept` | `concept` | `norm`, `doc_count`, `score` (summed TF-IDF) |
 

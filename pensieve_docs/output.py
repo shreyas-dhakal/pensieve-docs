@@ -94,6 +94,18 @@ def report(g, a: dict, stats: dict, cfg: dict) -> str:
         L += [_row(lab(e["source"]), e["relation"], lab(e["target"]), e["weight"], e["confidence_score"],
                    f"{e['source_file']} {e['source_location'] or ''}".strip()) for e in amb[:top]]
 
+    from .redact import RULES
+
+    kinds = list(dict.fromkeys(k for k, *_ in RULES))
+    L += ["", "## Redacted before indexing", "",
+          f"These are blanked out of the text before it is cached or indexed (your files are unchanged): {', '.join(kinds)}.",
+          ""]
+    if stats.get("redacted"):
+        L += [f"{sum(stats['redacted'].values())} found in {stats['redacted_files']} file(s):", "",
+              _row("kind", "count"), _row("---", "---:")]
+        L += [_row(k, n) for k, n in sorted(stats["redacted"].items())]
+    else:
+        L += ["None found."]
     if stats["skipped"]:
         L += ["", "## Skipped files", "", _row("file", "reason"), _row("---", "---")]
         L += [_row(f, r) for f, r in stats["skipped"]]

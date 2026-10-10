@@ -100,7 +100,7 @@ def _structure(g: Graph, records, doc_ids, root_name):
             parent = fid
         g.node(did, label=p["title"], file_type="paper" if p["doc_type"] == "pdf" else "document", kind="document",
                source_file=rel, source_location=None, doc_type=p["doc_type"], hash=r["hash"], mtime=r["mtime"],
-               size=r["size"], n_chunks=len(p["chunks"]), doi=p["doi"])
+               size=r["size"], n_chunks=len(p["chunks"]), doi=p["doi"], redactions=p.get("redactions") or {})
         g.edge(parent, did, "contains", "EXTRACTED", 1.0, 1.0, rel)
         seen = Counter()
         for i, c in enumerate(p["chunks"]):

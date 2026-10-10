@@ -4,13 +4,17 @@ parse_file(path) -> {
   "title", "doc_type", "doi",
   "chunks": [{"heading", "level", "page", "line", "offset", "text"}],   # one per section (split if long)
   "refs":   [{"kind": link|wikilink|url|doi|reference, "target", "chunk"}],
+  "redactions": {kind: count},   # what redact.py blanked out of this file
 }
 page is 1-based for PDFs, line is 1-based (paragraph number for docx), offset is a char offset (text files).
 """
 import re
+from collections import Counter
 from pathlib import Path
 
-VERSION = 2  # bump to invalidate cached parses
+from .redact import redact
+
+VERSION = 3  # bump to invalidate cached parses
 
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 SETEXT = re.compile(r"^(=+|-+)\s*$")
@@ -35,6 +39,15 @@ def parse_file(path: Path, max_chars: int = 4000) -> dict:
     else:
         title, sections = _text(path.read_text(encoding="utf-8", errors="replace"), ext != ".txt")
         extra = []
+    redacted = Counter()  # secrets and personal data never get past this point; see redact.py
+    for s in sections:
+        for k in ("heading", "text"):
+            if s[k]:
+                s[k], n = redact(s[k])
+                redacted += n
+    title, n = redact(title) if title else (title, Counter())
+    redacted += n
+    extra = [(where, key, redact(url)[0]) for where, key, url in extra]
     chunks = []
     for si, s in enumerate(sections):
         chunks += [{**c, "sec": si} for c in _split(s, max_chars) if c["heading"] or c["text"].strip()]
@@ -54,6 +67,7 @@ def parse_file(path: Path, max_chars: int = 4000) -> dict:
         "doi": _clean_doi(m.group(0)) if m else None,
         "chunks": chunks,
         "refs": refs,
+        "redactions": dict(redacted),
     }
 
 
