@@ -140,3 +140,10 @@ def test_reference_lists_are_not_mined_for_concepts(graph):
     labels = {n["label"].lower() for n in graph["nodes"] if n["kind"] == "concept"}
     assert "internal memo" not in labels and "residential solar" not in labels
     assert ("notes_battery_storage", "papers_battery_economics") in _edges(graph, "cites")
+
+
+def test_heading_words_and_own_titles_are_not_concepts(graph):
+    labels = {n["label"].lower() for n in graph["nodes"] if n["kind"] == "concept"}
+    assert "economics" not in labels  # "## Economics" heading only
+    assert "battery storage economics" not in labels  # only the memo's own title
+    assert "battery storage" in labels  # a note's title too, but used across 4 docs

@@ -13,7 +13,7 @@ from collections import Counter
 
 from .parse import REFLINE, is_ref_heading
 
-VERSION = 3  # bump when extraction output changes, to invalidate the per-file cache
+VERSION = 4  # bump when extraction output changes, to invalidate the per-file cache
 SKIP_ENTS = {"CARDINAL", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY", "ORDINAL"}
 _EDGE_POS = {"DET", "PRON", "ADP", "CCONJ", "PUNCT", "NUM", "PART", "SYM", "SPACE"}
 _CLEAN = [
@@ -66,11 +66,13 @@ def clean(ch: dict) -> str:
 def extract(chunks: list[dict], cfg: dict) -> dict:
     c = cfg["concepts"]
     texts = [clean(ch) for ch in chunks]
+    # end of the heading line, when clean() put one at the top of the text
+    heads = [t.find("\n") if t and ch["heading"] and not ch.get("cont") else 0 for ch, t in zip(chunks, texts)]
     from spacy.util import filter_spans
 
     stop = {w.lower() for w in c["stop_concepts"]}
     terms, labels, bow = [], {}, Counter()
-    for doc in nlp(c["spacy_model"]).pipe(texts, batch_size=32):
+    for doc, head in zip(nlp(c["spacy_model"]).pipe(texts, batch_size=32), heads):
         counts = Counter()
         # longest non-overlapping spans, so an entity inside a noun chunk is not double counted
         nc = list(doc.noun_chunks)
@@ -80,6 +82,8 @@ def extract(chunks: list[dict], cfg: dict) -> dict:
         spans = filter_spans([e for e in doc.ents if e.label_ not in SKIP_ENTS] + nc + of)
         for span in spans:
             r = _norm(span, c["max_tokens"], stop)
+            if r and " " not in r[0] and span.end_char <= head:
+                continue  # a one-word heading ("Economics") names a section; it is a concept only if the body uses it
             if r:
                 counts[r[0]] += 1
                 labels.setdefault(r[0], Counter())[r[1]] += 1

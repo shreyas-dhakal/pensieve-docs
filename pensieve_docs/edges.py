@@ -260,6 +260,9 @@ def _concepts(g: Graph, records, doc_ids, cfg):
     for ranked in tfidf.values():
         keep.update(t for t, _ in ranked[: c["keep_top_single"]])
     keep = {t for t in keep if not _generic(t, c["generic_zipf"])}
+    # a term found only in the doc it titles is that doc, already a node ("Battery Storage Economics")
+    only_in = {t: rel for rel, dt in doc_terms.items() for t in dt if df[t] == 1}
+    keep = {t for t in keep if t not in only_in or t != g.nodes[doc_ids[only_in[t]]]["label"].lower()}
 
     docs_of = defaultdict(list)
     best_chunk = {}
