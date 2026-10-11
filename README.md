@@ -268,6 +268,17 @@ It reports whether communities match topics, and whether each article's top 3 re
 | score cut-off 0.2 | keeps 66% of suggestions, all of them on topic |
 | `Index.related` with each article's full text as the query | 99% same topic, 87% linked on Wikipedia |
 
+`bench/compare.py` ranks related articles on the same corpus with standard baselines, and `bench/scidocs.py` does the same on [BEIR SCIDOCS](https://github.com/beir-cellar/beir) (paper title as the query, cited or co-read papers as relevant; first 100 queries, a 2933-paper pool):
+
+| method | wiki MAP, same topic / Wikipedia-linked | SCIDOCS nDCG@10 | SCIDOCS Recall@100 |
+| --- | --- | ---: | ---: |
+| pensieve-docs `Index.related` | 0.952 / 0.888 | 0.193 | 0.277 |
+| TF-IDF cosine | 0.949 / 0.859 | 0.312 | 0.502 |
+| BM25 | 0.944 / 0.853 | 0.313 | 0.507 |
+| MiniLM (all-MiniLM-L6-v2) | 0.993 / 0.873 | 0.452 | 0.785 |
+
+On the easy wiki set the concept ranking holds its own. On SCIDOCS it is well behind plain BM25: a short title shares few of the 25 concepts kept per paper, so most papers score 0. Use embeddings or BM25 when ranking quality matters; the graph's value is the explained, located connections, not retrieval scores.
+
 Six unrelated topics make this an easy test. The weak spots are generic words that survive as concepts (`technique`, `output`, `characteristics`).
 
 ## Known limits
