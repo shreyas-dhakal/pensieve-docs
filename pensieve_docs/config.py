@@ -33,6 +33,7 @@ DEFAULTS = {
         "top_k": 5,
         "min_count": 2,         # pairs sharing fewer chunks are dropped as noise
         "npmi_threshold": 0.2,  # weaker positive associations -> AMBIGUOUS
+        "min_docs_inferred": 2,  # pairs found in fewer documents -> AMBIGUOUS (unless the corpus is one document)
     },
     "hyperedge_min_docs": 3,
     "max_evidence": 10,         # evidence entries kept per edge (and shared chunks listed per co_occurs)

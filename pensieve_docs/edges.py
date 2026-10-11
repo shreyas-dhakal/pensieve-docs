@@ -351,12 +351,13 @@ def _cooccur(g: Graph, chunk_terms, concepts: set, recs, cc):
     """CO_OCCURS between concepts that share chunks. weight = PMI, tier by NPMI.
     `chunks` lists the shared chunks (first max_evidence) as [source_file, chunk, source_location]."""
     total, max_where = len(chunk_terms), g.max_evidence
-    single, pair, where = Counter(), Counter(), defaultdict(list)
+    single, pair, where, by_doc = Counter(), Counter(), defaultdict(list), defaultdict(Counter)
     for rel, i, ct in chunk_terms:
         present = sorted(t for t in ct if t in concepts)
         single.update(present)
         for a, b in combinations(present, 2):
             pair[(a, b)] += 1
+            by_doc[(a, b)][rel] += 1
             if len(where[(a, b)]) < max_where:
                 where[(a, b)].append((rel, i))
     stats = {}
@@ -370,21 +371,26 @@ def _cooccur(g: Graph, chunk_terms, concepts: set, recs, cc):
             stats[(a, b)] = (pmi, npmi, k)
     partners = defaultdict(list)
     for (a, b), (pmi, npmi, k) in stats.items():
-        partners[a].append((npmi, k, b))
-        partners[b].append((npmi, k, a))
+        # a pair seen in many documents beats one a single document repeats
+        rank = npmi * math.log(1 + len(by_doc[(a, b)]))
+        partners[a].append((rank, k, b))
+        partners[b].append((rank, k, a))
     chosen = set()
     for a, lst in partners.items():
-        for npmi, k, b in sorted(lst, reverse=True)[: cc["top_k"]]:
+        for _, k, b in sorted(lst, reverse=True)[: cc["top_k"]]:
             chosen.add(tuple(sorted((a, b))))
     thr = cc["npmi_threshold"]
+    min_docs = cc["min_docs_inferred"] if len(recs) > 1 else 1
     for a, b in sorted(chosen):
         pmi, npmi, k = stats[(a, b)]
+        docs = by_doc[(a, b)]
         locs = [[rel, i, location(recs[rel]["parsed"]["chunks"][i], recs[rel]["parsed"]["doc_type"])]
                 for rel, i in where[(a, b)]]
-        tier = "INFERRED" if npmi >= thr else "AMBIGUOUS"
+        tier = "INFERRED" if npmi >= thr and len(docs) >= min_docs else "AMBIGUOUS"
         score = bucket((npmi - thr) / (1 - thr)) if tier == "INFERRED" else ambiguous_score(npmi / thr)
         g.edge("concept_" + slug(a), "concept_" + slug(b), "co_occurs", tier, score, pmi, *locs[0],
-               npmi=round(npmi, 4), count=k, chunks=locs)
+               npmi=round(npmi, 4), count=k, n_docs=len(docs), max_doc_share=round(max(docs.values()) / k, 4),
+               chunks=locs)
 
 
 # ---------- INFERRED / AMBIGUOUS: document similarity ----------

@@ -72,7 +72,9 @@ def test_inferred_mentions_cooccur_hyperedges(graph):
     cfg = config.load()
     for e in _edges(graph, "co_occurs").values():
         assert e["count"] >= cfg["cooccur"]["min_count"]
-        assert (e["npmi"] >= cfg["cooccur"]["npmi_threshold"]) == (e["confidence"] == "INFERRED")
+        strong = e["npmi"] >= cfg["cooccur"]["npmi_threshold"] and e["n_docs"] >= cfg["cooccur"]["min_docs_inferred"]
+        assert strong == (e["confidence"] == "INFERRED")
+        assert 0 < e["max_doc_share"] <= 1
     concepts = {n["id"]: n for n in graph["nodes"] if n["kind"] == "concept"}
     assert graph["hyperedges"]
     for h in graph["hyperedges"]:
@@ -199,3 +201,15 @@ def test_nested_pair_keeps_cooccurrence_evidence(tmp_path):
     co = by_rel["co_occurs"]
     assert co["count"] == 3 and co["npmi"] > 0 and len(co["chunks"]) == 3
     assert {c[0] for c in co["chunks"]} == {"d0.md", "d1.md", "d2.md"}
+
+
+def test_pair_repeated_in_one_document_is_not_inferred(tmp_path):
+    # one doc says "turbine ... gearbox" in every section; the others mention each alone
+    pair = "".join(f"## Part {k}\n\nThe turbine drives a gearbox.\n\n" for k in range(6))
+    files = {"a.md": "# A\n\n" + pair,
+             "b.md": "# B\n\nThe turbine was tall.\n\n" + "".join(_FILLER.format(k) for k in range(4)),
+             "c.md": "# C\n\nThe gearbox was oiled.\n\n" + "".join(_FILLER.format(k) for k in range(4))}
+    g = _build_dir(tmp_path, files)
+    (e,) = [e for e in g["links"] if {e["source"], e["target"]} == {"concept_turbine", "concept_gearbox"}]
+    assert e["relation"] == "co_occurs" and e["count"] == 6 and e["n_docs"] == 1 and e["max_doc_share"] == 1
+    assert e["confidence"] == "AMBIGUOUS"

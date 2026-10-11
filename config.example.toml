@@ -31,6 +31,7 @@ ambiguous_min = 0.08        # [ambiguous_min, threshold) -> AMBIGUOUS similar_to
 top_k = 5
 min_count = 2               # pairs sharing fewer chunks are dropped
 npmi_threshold = 0.2        # below -> AMBIGUOUS co_occurs
+min_docs_inferred = 2       # pairs found in fewer documents -> AMBIGUOUS co_occurs; 1 = off
 
 
 [report]
