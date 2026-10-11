@@ -52,7 +52,8 @@ def test_every_edge_has_type_weight_confidence_tier_provenance(graph):
             assert tier == "AMBIGUOUS" and 0.1 <= score <= 0.3
         assert (SAMPLE / e["source_file"]).exists()
     assert {e["relation"] for e in graph["links"]} == {
-        "contains", "has_section", "links_to", "cites", "mentions", "co_occurs", "similar_to", "conceptually_related_to"}
+        "contains", "has_section", "links_to", "cites", "mentions", "co_occurs", "similar_to", "conceptually_related_to",
+        "shares_concepts"}
 
 
 def test_extracted_structure_links_and_citations(graph):
@@ -89,7 +90,7 @@ def test_similarity_threshold_and_top_k(tmp_path):
     cfg["similarity"].update(top_k=1, threshold=0.2, ambiguous_min=0.1)
     build(SAMPLE, cfg, tmp_path)
     g = json.loads((tmp_path / "graph.json").read_text())
-    sims = list(_edges(g, "similar_to").values())
+    sims = [x for e in g["links"] for x in e["evidence"] if x["relation"] == "similar_to"]  # often under shares_concepts
     assert sims and len(sims) <= sum(1 for n in g["nodes"] if n["kind"] == "document")
     for e in sims:
         assert (e["weight"] >= 0.2) == (e["confidence"] == "INFERRED")
@@ -290,3 +291,32 @@ def test_cooccurrence_marks_the_broader_concept(tmp_path):
             and {x["source"], x["target"]} == {"concept_anophele", "concept_mosquito"}]  # spaCy's lemma
     assert e["p_b_given_a"] == 1.0 and e["p_a_given_b"] == 0.5  # a = anopheles, b = mosquito
     assert e["broader"] == "concept_mosquito"
+
+
+def test_documents_sharing_concepts_are_linked_with_reasons(graph):
+    from pensieve_docs.edges import overlap
+    from pensieve_docs.related import MIN_SCORE
+
+    docs = {n["id"] for n in graph["nodes"] if n["kind"] == "document"}
+    w = {}
+    for e in graph["links"]:
+        if e["relation"] == "mentions" and e["source"] in docs:
+            w.setdefault(e["source"], {})[e["target"]] = e["weight"]
+    shares = [x for e in graph["links"] for x in e["evidence"] if x["relation"] == "shares_concepts"]
+    assert shares
+    for x in shares:
+        # same score related.py and bench/eval.py rank by
+        assert x["weight"] == pytest.approx(sum(s for s, _ in overlap(w[x["source"]], w[x["target"]])), abs=1e-3)
+        assert x["weight"] >= MIN_SCORE
+        assert 1 <= len(x["shared"]) <= 3 and x["confidence"] == "INFERRED"
+        for sh in x["shared"]:
+            (fa, _, la), (fb, _, lb) = sh["locations"]
+            assert sh["concept"] in w[x["source"]] and sh["concept"] in w[x["target"]]
+            assert (SAMPLE / fa).is_file() and (SAMPLE / fb).is_file() and la and lb
+
+
+def test_sections_mention_the_concepts_in_them(graph):
+    nodes = {n["id"]: n for n in graph["nodes"]}
+    secs = [e for e in graph["links"] if e["relation"] == "mentions" and nodes[e["source"]]["kind"] == "section"]
+    assert secs and all(nodes[e["target"]]["kind"] == "concept" and e["count"] >= 1 for e in secs)
+    assert ("meetings_2024_06_review#battery_decision", "concept_home_battery") in {(e["source"], e["target"]) for e in secs}

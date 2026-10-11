@@ -14,7 +14,7 @@ from pathlib import Path
 
 from . import config
 from .concepts import nlp
-from .edges import _words
+from .edges import _words, overlap
 
 MIN_SCORE = 0.2  # bench: keeps ~2/3 of top-3 suggestions, all on topic
 
@@ -70,9 +70,10 @@ class Index:
         for f, d in self.docs.items():
             if f == exclude:
                 continue
-            shared = sorted(((min(q[c], m[0]), c, m[1]) for c, m in self.mentions[d].items() if c in q), reverse=True)
-            score = sum(s for s, _, _ in shared)
+            m = self.mentions[d]
+            shared = overlap(q, {c: w for c, (w, _) in m.items()})
+            score = sum(s for s, _ in shared)
             if score >= min_score:
                 out.append({"id": d, "label": self.nodes[d]["label"], "source_file": f, "score": round(score, 3),
-                            "reasons": [{"concept": self.nodes[c]["label"], "where": f"{f} {loc}"} for _, c, loc in shared[:3]]})
+                            "reasons": [{"concept": self.nodes[c]["label"], "where": f"{f} {m[c][1]}"} for _, c in shared[:3]]})
         return sorted(out, key=lambda r: -r["score"])[:k]

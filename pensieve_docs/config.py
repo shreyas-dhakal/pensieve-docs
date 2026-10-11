@@ -46,6 +46,9 @@ DEFAULTS = {
         "label_min": 2,         # ...and at least this many occurrences
         "min_docs_inferred": 2,  # pairs found in fewer documents -> AMBIGUOUS (unless the corpus is one document)
     },
+    "shares": {
+        "top_k": 5,             # shares_concepts edges to each document's best partners (overlap >= related.MIN_SCORE)
+    },
     "hierarchy": {
         "broader_min": 0.8,     # co_occurs gets broader = b when P(b | a) >= this and P(a | b) < this
         "isa_score": 0.65,      # is_a from Hearst patterns ("X such as Y")...

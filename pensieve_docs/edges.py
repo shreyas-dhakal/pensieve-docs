@@ -324,7 +324,7 @@ def _concepts(g: Graph, records, doc_ids, cfg):
     only_in = {t: rel for rel, dt in doc_terms.items() for t in dt if df[t] == 1}
     keep = {t for t in keep if t not in only_in or t != g.nodes[doc_ids[only_in[t]]]["label"].lower()}
 
-    docs_of = defaultdict(list)
+    docs_of, doc_w = defaultdict(list), defaultdict(dict)  # doc_w: rel -> concept -> (weight, chunk, location)
     best_chunk = {}
     for rel, i, ct in chunk_terms:
         for t, k in ct.items():
@@ -343,6 +343,7 @@ def _concepts(g: Graph, records, doc_ids, cfg):
             loc = location(p["chunks"][i], p["doc_type"])
             g.edge(doc_ids[rel], cid, "mentions", "INFERRED", bucket(w / top), w, rel, i, loc)
             docs_of[t].append((rel, w, i, loc))
+            doc_w[rel][t] = (w, i, loc)
 
     for t, docs in docs_of.items():
         cid = "concept_" + slug(t)
@@ -366,9 +367,63 @@ def _concepts(g: Graph, records, doc_ids, cfg):
             if a != b:
                 links[(r["rel"], i)].append((a, b, verb, neg, hedged))
 
+    _shares(g, doc_w, doc_ids, cfg["shares"])
+    _section_mentions(g, chunk_terms, doc_w, recs)
     _isa(g, records, canon, set(docs_of), recs, cfg["hierarchy"])
     _nested(g, set(docs_of))
     _cooccur(g, chunk_terms, links, set(docs_of), recs, cfg)
+
+
+def overlap(a: dict, b: dict) -> list[tuple[float, str]]:
+    """Concepts two weight maps share, each scored min(weight in a, weight in b), best first.
+    The scores' sum is how related two documents (or a query and a document) are."""
+    return sorted(((min(a[t], b[t]), t) for t in a.keys() & b.keys()), key=lambda x: (-x[0], x[1]))
+
+
+def _shares(g: Graph, doc_w: dict, doc_ids: dict, sc: dict):
+    """SHARES_CONCEPTS between each document and its top_k partners by overlap(), as related.py ranks them."""
+    from .related import MIN_SCORE  # related imports this module
+
+    weights = {rel: {t: v[0] for t, v in ts.items()} for rel, ts in doc_w.items()}
+    by_concept = defaultdict(list)
+    for rel in sorted(weights):
+        for t in weights[rel]:
+            by_concept[t].append(rel)
+    pairs = {tuple(p) for rels in by_concept.values() for p in combinations(rels, 2)}  # docs sharing anything
+    scores = {p: overlap(weights[p[0]], weights[p[1]]) for p in sorted(pairs)}
+    total = {p: sum(x for x, _ in sh) for p, sh in scores.items()}
+    top = max(total.values(), default=0)
+    partners = defaultdict(list)
+    for (a, b), x in total.items():
+        if x >= MIN_SCORE:
+            partners[a].append((-x, b))
+            partners[b].append((-x, a))
+    chosen = {tuple(sorted((a, b))) for a, lst in partners.items() for _, b in sorted(lst)[: sc["top_k"]]}
+    for a, b in sorted(chosen):
+        shared = [{"concept": "concept_" + slug(t), "weight": round(w, 4),
+                   "locations": [[a, *doc_w[a][t][1:]], [b, *doc_w[b][t][1:]]]} for w, t in scores[(a, b)][:3]]
+        _, i, loc = doc_w[a][scores[(a, b)][0][1]]
+        g.edge(doc_ids[a], doc_ids[b], "shares_concepts", "INFERRED", bucket(total[(a, b)] / top), total[(a, b)],
+               a, i, loc, shared=shared)
+
+
+def _section_mentions(g: Graph, chunk_terms, doc_w: dict, recs):
+    """MENTIONS from a section to its document's concepts that appear in it (its chunk + continuation chunks).
+    weight = count in the section."""
+    counts = {(rel, i): ct for rel, i, ct in chunk_terms}
+    for sid in sorted(n for n, d in g.nodes.items() if d["kind"] == "section"):
+        rel, i = g.nodes[sid]["source_file"], g.nodes[sid]["chunk"]
+        chunks = recs[rel]["parsed"]["chunks"]
+        here, j = Counter(), i
+        while j == i or (j < len(chunks) and chunks[j].get("cont")):
+            here.update({t: k for t, k in counts[(rel, j)].items() if t in doc_w[rel]})
+            j += 1
+        if not here:
+            continue
+        top = max(here.values())
+        for t, k in sorted(here.items()):
+            g.edge(sid, "concept_" + slug(t), "mentions", "INFERRED", bucket(k / top), k, rel, i,
+                   g.nodes[sid]["source_location"], count=k)
 
 
 def _isa(g: Graph, records, canon: dict, concepts: set, recs, h: dict):

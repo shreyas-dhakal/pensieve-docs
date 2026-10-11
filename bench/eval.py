@@ -4,7 +4,7 @@ Builds the graph, then reports
 - communities vs. topics: purity (is each community one topic?) and inverse purity (is each topic one community?)
 - related docs: for each doc, the top 3 other docs by shared concepts (min TF-IDF weight, summed);
   how many share its topic, and how many it links to on Wikipedia (either direction)
-- the same for the similar_to edges
+- the same for the similar_to and shares_concepts edges
 - the same purities averaged over Louvain seeds, since one seed moves inverse purity by several points
 - co_occurs edges by tier, and how many join two concepts whose documents share a topic
 - concept count, and the most widespread concepts to eyeball for junk
@@ -20,6 +20,7 @@ import networkx as nx
 
 from pensieve_docs import config
 from pensieve_docs.build import build
+from pensieve_docs.edges import overlap
 from pensieve_docs.parse import parse_file
 from pensieve_docs.related import Index
 
@@ -66,7 +67,7 @@ def cooccur_topics(g: dict, docs: dict, topic: dict) -> dict:
     """tier -> (edges, share whose two concepts have the same majority topic among the docs mentioning them)."""
     ct = defaultdict(Counter)
     for e in g["links"]:
-        if e["relation"] == "mentions":
+        if e["relation"] == "mentions" and e["source"] in docs:
             ct[e["target"]][topic[docs[e["source"]]]] += 1
     top = {c: t.most_common(1)[0][0] for c, t in ct.items()}
     out = {}
@@ -96,12 +97,13 @@ def main(data: Path, out: Path):
 
     # related docs by shared concepts (what a recall badge would show)
     w = defaultdict(dict)
-    sim = defaultdict(dict)
-    for e in g["links"]:
+    sim, shares = defaultdict(dict), defaultdict(dict)
+    for e in (x for e in g["links"] for x in e["evidence"]):  # every rule's evidence, not only the headline
         if e["relation"] == "mentions":
             w[e["source"]][e["target"]] = e["weight"]
-        elif e["relation"] == "similar_to":
-            sim[e["source"]][e["target"]] = sim[e["target"]][e["source"]] = e["weight"]
+        elif e["relation"] in ("similar_to", "shares_concepts"):
+            m = sim if e["relation"] == "similar_to" else shares
+            m[e["source"]][e["target"]] = m[e["target"]][e["source"]] = e["weight"]
 
     scored = []  # (score, same topic) for every concept suggestion, to pick a badge threshold
 
@@ -120,7 +122,7 @@ def main(data: Path, out: Path):
         return same / max(total, 1), link / max(total, 1), total, misses
 
     def score(d, o):
-        return sum(min(w[d][c], w[o][c]) for c in w[d].keys() & w[o].keys())
+        return sum(x for x, _ in overlap(w[d], w[o]))
 
     def by_concepts(d):
         sc = {o: score(d, o) for o in docs if o != d}
@@ -129,8 +131,12 @@ def main(data: Path, out: Path):
     def by_similarity(d):
         return sorted(sim[d], key=lambda o: -sim[d][o])
 
+    def by_shares(d):
+        return sorted(shares[d], key=lambda o: -shares[d][o])
+
     cp = precision(by_concepts)
     sp = precision(by_similarity)
+    hp = precision(by_shares)
     # the real query path: each article's full text through Index.related, as the product would call it
     idx, hits, same, link, t1 = Index(out / "graph.json"), 0, 0, 0, time.perf_counter()
     for f in docs.values():
@@ -149,6 +155,7 @@ def main(data: Path, out: Path):
     print("co_occurs:", ", ".join(f"{t} {k} ({ok:.1%} same topic)" for t, (k, ok) in co.items()))
     print(f"related@{K} by concepts:  same topic {cp[0]:.0%}, wiki-linked {cp[1]:.0%} ({cp[2]} suggestions)")
     print(f"related@{K} by similar_to: same topic {sp[0]:.0%}, wiki-linked {sp[1]:.0%} ({sp[2]} suggestions)")
+    print(f"related@{K} by shares_concepts: same topic {hp[0]:.0%}, wiki-linked {hp[1]:.0%} ({hp[2]} suggestions)")
     print(f"Index.related (threshold {idx_threshold()}): {hits / (K * len(docs)):.0%} of slots filled, "
           f"same topic {same / max(hits, 1):.0%}, wiki-linked {link / max(hits, 1):.0%}, {qms:.0f} ms per query")
     for th in (0.1, 0.2, 0.3, 0.5):
@@ -158,7 +165,7 @@ def main(data: Path, out: Path):
     print(f"concepts: {len(concepts)} ({sum(' ' not in c['norm'] for c in concepts)} single-word)")
     print("most widespread:", ", ".join(f"{c['label']}({c['doc_count']})" for c in concepts[:40]))
     print("cross-topic concept suggestions:", *cp[3][:12], sep="\n  ")
-    return {"purity": purity, "inverse_purity": inverse, "cooccur": co, "concept_p": cp[:2], "similar_p": sp[:2]}
+    return {"purity": purity, "inverse_purity": inverse, "cooccur": co, "concept_p": cp[:2], "similar_p": sp[:2], "shares_p": hp[:2]}
 
 
 if __name__ == "__main__":
