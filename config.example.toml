@@ -4,6 +4,7 @@
 out_dir = "pensieve-out"
 exclude = [".git", "node_modules", "__pycache__", ".venv", "pensieve-out", "graphify-out"]
 hyperedge_min_docs = 3      # concepts in this many docs also get a hyperedge record
+max_evidence = 10           # evidence entries kept per edge (and shared chunks listed per co_occurs)
 
 [chunk]
 max_chars = 4000            # sections longer than this are split on paragraph boundaries

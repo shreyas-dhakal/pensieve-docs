@@ -35,6 +35,7 @@ DEFAULTS = {
         "npmi_threshold": 0.2,  # weaker positive associations -> AMBIGUOUS
     },
     "hyperedge_min_docs": 3,
+    "max_evidence": 10,         # evidence entries kept per edge (and shared chunks listed per co_occurs)
     "report": {"top_n": 15},
     "enrich": [],               # future post-build hooks, dotted paths: fn(graph, cfg). Empty by default.
 }

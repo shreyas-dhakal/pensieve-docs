@@ -1,7 +1,8 @@
 """Corpus-level graph construction: nodes, typed/tiered edges, hyperedges.
 
 Input records (one per parsed file): {"rel", "hash", "mtime", "size", "parsed", "concepts"}.
-One edge per node pair; on a clash the stronger tier wins (EXTRACTED > INFERRED > AMBIGUOUS).
+One edge per node pair. Every rule that produces the pair adds to its `evidence` list; the headline fields
+follow the strongest evidence (EXTRACTED > INFERRED > AMBIGUOUS, then higher confidence_score).
 """
 import difflib
 import math
@@ -39,10 +40,11 @@ def ambiguous_score(x: float) -> float:
 
 
 class Graph:
-    def __init__(self):
+    def __init__(self, max_evidence: int = 10):
         self.nodes: dict[str, dict] = {}
         self.edges: dict[frozenset, dict] = {}
         self.hyperedges: list[dict] = []
+        self.max_evidence = max_evidence
 
     def node(self, nid: str, **attrs):
         self.nodes.setdefault(nid, {"id": nid}).update(attrs)
@@ -51,18 +53,20 @@ class Graph:
         if src == tgt:
             return
         key = frozenset((src, tgt))
-        old = self.edges.get(key)
-        if old and RANK[old["confidence"]] <= RANK[tier]:
-            return
-        self.edges[key] = {
-            "source": src, "target": tgt, "relation": relation,
-            "confidence": tier, "confidence_score": round(score, 2), "weight": round(weight, 4),
-            "source_file": source_file, "source_location": source_location, "chunk": chunk, **extra,
-        }
+        ev = {"source": src, "target": tgt, "relation": relation,
+              "confidence": tier, "confidence_score": round(score, 2), "weight": round(weight, 4),
+              "source_file": source_file, "source_location": source_location, "chunk": chunk, **extra}
+        evs = self.edges[key]["evidence"] if key in self.edges else []
+        if ev in evs:
+            return  # the same rule reached the pair from the other side (similar_to top-k of both docs)
+        evs = evs + [ev]
+        # stable sort: on a tie the earlier evidence stays first, so the result only depends on call order
+        evs = sorted(evs, key=lambda e: (RANK[e["confidence"]], -e["confidence_score"]))[: self.max_evidence]
+        self.edges[key] = {**evs[0], "evidence": evs}
 
 
 def build(records: list[dict], root_name: str, cfg: dict) -> Graph:
-    g = Graph()
+    g = Graph(cfg["max_evidence"])
     doc_ids = _doc_ids([r["rel"] for r in records])
     _structure(g, records, doc_ids, root_name)
     _links(g, records, doc_ids)
@@ -151,7 +155,7 @@ def _links(g: Graph, records, doc_ids):
             elif kind == "url":
                 external += 1
             if target and target != did:
-                g.edge(did, target, relation, "EXTRACTED", 1.0, 1.0, rel, ref["chunk"], loc, evidence=t[:200])
+                g.edge(did, target, relation, "EXTRACTED", 1.0, 1.0, rel, ref["chunk"], loc, ref=t[:200])
         g.nodes[did]["external_links"] = external
 
 
@@ -344,15 +348,17 @@ def _nested(g: Graph, concepts: set):
 
 
 def _cooccur(g: Graph, chunk_terms, concepts: set, recs, cc):
-    """CO_OCCURS between concepts that share chunks. weight = PMI, tier by NPMI."""
-    total = len(chunk_terms)
-    single, pair, first = Counter(), Counter(), {}
+    """CO_OCCURS between concepts that share chunks. weight = PMI, tier by NPMI.
+    `chunks` lists the shared chunks (first max_evidence) as [source_file, chunk, source_location]."""
+    total, max_where = len(chunk_terms), g.max_evidence
+    single, pair, where = Counter(), Counter(), defaultdict(list)
     for rel, i, ct in chunk_terms:
         present = sorted(t for t in ct if t in concepts)
         single.update(present)
         for a, b in combinations(present, 2):
             pair[(a, b)] += 1
-            first.setdefault((a, b), (rel, i))
+            if len(where[(a, b)]) < max_where:
+                where[(a, b)].append((rel, i))
     stats = {}
     for (a, b), k in pair.items():
         if k < cc["min_count"]:
@@ -373,12 +379,12 @@ def _cooccur(g: Graph, chunk_terms, concepts: set, recs, cc):
     thr = cc["npmi_threshold"]
     for a, b in sorted(chosen):
         pmi, npmi, k = stats[(a, b)]
-        rel, i = first[(a, b)]
-        p = recs[rel]["parsed"]
+        locs = [[rel, i, location(recs[rel]["parsed"]["chunks"][i], recs[rel]["parsed"]["doc_type"])]
+                for rel, i in where[(a, b)]]
         tier = "INFERRED" if npmi >= thr else "AMBIGUOUS"
         score = bucket((npmi - thr) / (1 - thr)) if tier == "INFERRED" else ambiguous_score(npmi / thr)
-        g.edge("concept_" + slug(a), "concept_" + slug(b), "co_occurs", tier, score, pmi, rel, i,
-               location(p["chunks"][i], p["doc_type"]), npmi=round(npmi, 4), count=k)
+        g.edge("concept_" + slug(a), "concept_" + slug(b), "co_occurs", tier, score, pmi, *locs[0],
+               npmi=round(npmi, 4), count=k, chunks=locs)
 
 
 # ---------- INFERRED / AMBIGUOUS: document similarity ----------

@@ -25,6 +25,10 @@ def _edges(g, relation):
 def test_graphify_compatible_shape(graph):
     assert list(graph) == ["directed", "multigraph", "graph", "nodes", "links", "hyperedges", "built_at_commit"]
     assert graph["graph"]["hyperedges"] == graph["hyperedges"]
+    import networkx as nx
+
+    G = nx.node_link_graph(graph, edges="links")  # list-valued `evidence` must not get in the way
+    assert G.number_of_edges() == len(graph["links"])
     for n in graph["nodes"]:
         assert {"id", "label", "norm_label", "file_type", "kind", "community", "community_name", "source_file"} <= n.keys()
     docs = [n for n in graph["nodes"] if n["kind"] == "document"]
@@ -94,6 +98,19 @@ def test_stronger_tier_wins_on_same_pair():
     g.edge("b", "a", "links_to", "EXTRACTED", 1.0, 1.0, "x")
     g.edge("a", "b", "similar_to", "INFERRED", 0.75, 0.5, "x")
     assert [e["relation"] for e in g.edges.values()] == ["links_to"]
+    (e,) = g.edges.values()
+    assert (e["source"], e["target"]) == ("b", "a")
+    assert [(x["relation"], x["confidence"]) for x in e["evidence"]] == [
+        ("links_to", "EXTRACTED"), ("similar_to", "INFERRED"), ("similar_to", "AMBIGUOUS")]
+
+
+def test_evidence_is_capped_and_ties_keep_the_first():
+    g = Graph(max_evidence=3)
+    for i in range(5):
+        g.edge("a", "b", "co_occurs", "INFERRED", 0.75, 1.0, f"f{i}")
+    g.edge("a", "b", "co_occurs", "INFERRED", 0.75, 1.0, "f0")  # same evidence again: ignored
+    (e,) = g.edges.values()
+    assert e["source_file"] == "f0" and [x["source_file"] for x in e["evidence"]] == ["f0", "f1", "f2"]
 
 
 def test_build_makes_no_network_calls(tmp_path, monkeypatch):
@@ -159,3 +176,26 @@ def test_node_ids_never_collide(tmp_path):
     docs = [n for n in g["nodes"] if n["kind"] == "document"]
     assert len(docs) == 3
     assert len({n["id"] for n in g["nodes"]}) == len(g["nodes"])
+
+
+def _build_dir(tmp_path, files: dict, cfg=None):
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    build(tmp_path, cfg or config.load(), tmp_path / "out")
+    return json.loads((tmp_path / "out" / "graph.json").read_text())
+
+
+_FILLER = "## Filler {0}\n\nThe weather was mild that week. Nobody wrote much down.\n\n"
+
+
+def test_nested_pair_keeps_cooccurrence_evidence(tmp_path):
+    # "solar inverter" contains "inverter" (conceptually_related_to) and they also share chunks (co_occurs)
+    body = "## Site {0}\n\nThe solar inverter failed again. We replaced the inverter twice.\n\n"
+    files = {f"d{d}.md": f"# Doc {d}\n\n" + body.format(d) + "".join(_FILLER.format(k) for k in range(4)) for d in range(3)}
+    g = _build_dir(tmp_path, files)
+    (e,) = [e for e in g["links"] if {e["source"], e["target"]} == {"concept_solar_inverter", "concept_inverter"}]
+    by_rel = {x["relation"]: x for x in e["evidence"]}
+    assert by_rel.keys() == {"conceptually_related_to", "co_occurs"}
+    co = by_rel["co_occurs"]
+    assert co["count"] == 3 and co["npmi"] > 0 and len(co["chunks"]) == 3
+    assert {c[0] for c in co["chunks"]} == {"d0.md", "d1.md", "d2.md"}
