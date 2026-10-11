@@ -94,6 +94,14 @@ def report(g, a: dict, stats: dict, cfg: dict) -> str:
         L += [_row(lab(e["source"]), e["relation"], lab(e["target"]), e["weight"], e["confidence_score"],
                    f"{e['source_file']} {e['source_location'] or ''}".strip()) for e in amb[:top]]
 
+    L += ["", "## Concepts dropped as too common", "",
+          "Found in more than `max_doc_frac` of documents or `max_chunk_frac` of chunks, so they tell nothing apart.", ""]
+    if g.dropped:
+        L += [_row("concept", "docs", "share of chunks"), _row("---", "---:", "---:")]
+        L += [_row(d["label"], d["docs"], d["chunk_frac"]) for d in g.dropped]
+    else:
+        L += ["None."]
+
     from .redact import RULES
 
     kinds = list(dict.fromkeys(k for k, *_ in RULES))

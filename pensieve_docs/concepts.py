@@ -6,6 +6,7 @@ Extractor interface (any dotted path in config `concepts.extractors`):
         "labels": {norm: {surface: count}}  # display forms
         "bow":    {lemma: count}            # bag of words for TF-IDF similarity
         "rels":   [[a, b, verb|None, negated, hedged, chunk], ...]  # optional: concept pairs close in a parse
+        "abbrevs": [[short norm, long norm], ...]  # optional: "large language model (LLM)"
     }
 Results are cached per file, so extractors must be deterministic for a given file content.
 """
@@ -15,7 +16,7 @@ from itertools import combinations
 
 from .parse import REFLINE, is_ref_heading
 
-VERSION = 7  # bump when extraction output changes, to invalidate the per-file cache
+VERSION = 8  # bump when extraction output changes, to invalidate the per-file cache
 SKIP_ENTS = {"CARDINAL", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY", "ORDINAL"}
 _EDGE_POS = {"DET", "PRON", "ADP", "CCONJ", "PUNCT", "NUM", "PART", "SYM", "SPACE", "ADV"}
 _CLEAN = [
@@ -87,6 +88,45 @@ def _rels(sent_spans, max_path: int, hedges: set, chunk: int) -> list:
     return out
 
 
+_PAREN = re.compile(r"\(([^()]{2,10})\)")
+
+
+def _long_start(short: str, cand: str) -> int | None:
+    """Schwartz & Hearst (2003): where the shortest tail of `cand` starts that holds short's letters in order,
+    with its first letter at the start of a word. None if there is no such tail."""
+    s, i = len(short) - 1, len(cand) - 1
+    while s >= 0:
+        ch = short[s].lower()
+        if not ch.isalnum():
+            s -= 1
+            continue
+        while i >= 0 and (cand[i].lower() != ch or (s == 0 and i > 0 and cand[i - 1].isalnum())):
+            i -= 1
+        if i < 0:
+            return None
+        i, s = i - 1, s - 1
+    return cand.rfind(" ", 0, i + 1) + 1
+
+
+def _abbrevs(doc, max_tokens: int, stop: set) -> list:
+    """[(short norm, short text, long norm, long text)] for each "long form (SHORT)" in the doc."""
+    out = []
+    for m in _PAREN.finditer(doc.text):
+        short = m.group(1).strip()
+        if not (short[0].isalnum() and any(ch.isupper() for ch in short) and len(short.split()) <= 2):
+            continue
+        before = doc.text[:m.start()].rstrip()
+        words = list(re.finditer(r"\S+", before))[-min(len(short) + 5, 2 * len(short)):]
+        if not words or (k := _long_start(short, cand := before[words[0].start():])) is None:
+            continue
+        a0 = m.start(1) + m.group(1).find(short)
+        sn = _norm(doc.char_span(a0, a0 + len(short), alignment_mode="expand"), max_tokens, stop)
+        ln = _norm(doc.char_span(words[0].start() + k, len(before), alignment_mode="expand"), max_tokens, stop)
+        if sn and ln and len(ln[0]) > len(sn[0]) and sn[0] not in ln[0].split():
+            out.append((*sn, *ln))
+    return out
+
+
 def clean(ch: dict) -> str:
     """Chunk prose as the extractor sees it: heading + text, markup and links stripped.
     Reference lists are left out: they already become `cites` edges, and their titles are not this doc's ideas."""
@@ -108,7 +148,7 @@ def extract(chunks: list[dict], cfg: dict) -> dict:
 
     stop = {w.lower() for w in c["stop_concepts"]}
     hedges = {w.lower() for w in c["hedge_words"]}
-    terms, labels, bow, rels = [], {}, Counter(), []
+    terms, labels, bow, rels, abbrevs = [], {}, Counter(), [], []
     for ci, (doc, head) in enumerate(zip(nlp(c["spacy_model"]).pipe(texts, batch_size=32), heads)):
         counts, by_sent = Counter(), defaultdict(list)
         # longest non-overlapping spans, so an entity inside a noun chunk is not double counted
@@ -126,7 +166,11 @@ def extract(chunks: list[dict], cfg: dict) -> dict:
                 labels.setdefault(r[0], Counter())[r[1]] += 1
                 by_sent[span.sent.start].append((span, r[0]))
         terms.append(dict(counts))
+        for sn, st, ln, lt in _abbrevs(doc, c["max_tokens"], stop):
+            abbrevs.append([sn, ln])
+            for n, t in ((sn, st), (ln, lt)):  # known forms, so backfill finds both wherever they appear
+                labels.setdefault(n, Counter())[t] += 0
         for k in sorted(by_sent):
             rels += _rels(by_sent[k], c["max_path"], hedges, ci)
         bow.update(t.lemma_.lower() for t in doc if t.is_alpha and not t.is_stop and len(t) > 2)
-    return {"terms": terms, "labels": {k: dict(v) for k, v in labels.items()}, "bow": dict(bow), "rels": rels}
+    return {"terms": terms, "labels": {k: dict(v) for k, v in labels.items()}, "bow": dict(bow), "rels": rels, "abbrevs": abbrevs}

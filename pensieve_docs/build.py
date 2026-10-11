@@ -22,7 +22,7 @@ def _load(path: str):
 
 def _extract(chunks, cfg) -> dict:
     """Run every configured extractor and sum their results."""
-    out = {"terms": [Counter() for _ in chunks], "labels": {}, "bow": Counter(), "rels": []}
+    out = {"terms": [Counter() for _ in chunks], "labels": {}, "bow": Counter(), "rels": [], "abbrevs": []}
     for path in cfg["concepts"]["extractors"]:
         r = _load(path)(chunks, cfg)
         for acc, terms in zip(out["terms"], r["terms"]):
@@ -31,8 +31,9 @@ def _extract(chunks, cfg) -> dict:
             out["labels"].setdefault(k, Counter()).update(forms)
         out["bow"].update(r["bow"])
         out["rels"] += r.get("rels", [])
+        out["abbrevs"] += r.get("abbrevs", [])
     return {"terms": [dict(t) for t in out["terms"]], "labels": {k: dict(v) for k, v in out["labels"].items()},
-            "bow": dict(out["bow"]), "rels": out["rels"]}
+            "bow": dict(out["bow"]), "rels": out["rels"], "abbrevs": out["abbrevs"]}
 
 
 def _cache_tag(cfg) -> str:

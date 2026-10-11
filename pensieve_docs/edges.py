@@ -45,6 +45,7 @@ class Graph:
         self.edges: dict[frozenset, dict] = {}
         self.hyperedges: list[dict] = []
         self.max_evidence = max_evidence
+        self.dropped: list[dict] = []  # concepts too common in this corpus to mean anything, for the report
 
     def node(self, nid: str, **attrs):
         self.nodes.setdefault(nid, {"id": nid}).update(attrs)
@@ -173,17 +174,36 @@ def _term_counts(records) -> tuple[Counter, Counter]:
     return df, tot
 
 
-def _merge_map(df: Counter, tot: Counter, ratio: float) -> dict[str, str]:
-    """Fold near-duplicate norms (e.g. 'lithium-ion battery' / 'lithium ion battery') onto the most frequent."""
+def _aliases(records, max_zipf: float) -> dict[str, str]:
+    """Abbreviation -> long form, from "long form (ABBR)" anywhere in the corpus; the most frequent pairing wins.
+    Skips abbreviations that are also everyday words: matching is case-blind, so "feed-in tariff (FIT)"
+    would turn every "fit" into a feed-in tariff."""
+    seen = Counter((a, b) for r in records for a, b in r["concepts"].get("abbrevs", [])
+                   if zipf_frequency(a, "en") < max_zipf)
+    best = {}
+    for (a, b), k in sorted(seen.items(), key=lambda x: (-x[1], x[0])):
+        best.setdefault(a, b)
+    return {a: b for a, b in best.items() if b not in best}  # no chains: "ML" -> "machine learning" only
+
+
+def _merge_map(df: Counter, tot: Counter, ratio: float, alias: dict | None = None) -> dict[str, str]:
+    """Fold near-duplicate norms (e.g. 'lithium-ion battery' / 'lithium ion battery') onto the most frequent.
+    An abbreviation folds onto its long form first, whatever difflib would say."""
+    alias = alias or {}
     # ponytail: bucketed by first 2 alnum chars, so O(n * bucket); fine to ~50k terms
     canon, buckets = {}, defaultdict(list)
     for t in sorted(df, key=lambda t: (-df[t], -tot[t], t)):
+        if t in alias:
+            continue
         key = re.sub(r"[^a-z0-9]", "", t)[:2]
         hit = difflib.get_close_matches(t, buckets[key], 1, ratio)
         canon[t] = hit[0] if hit else t
         if not hit:
             buckets[key].append(t)
 
+    for a, b in alias.items():
+        if a in df:
+            canon[a] = canon.get(b, b)
     known = set(canon.values())
 
     def fold(t):
@@ -263,7 +283,7 @@ def _concepts(g: Graph, records, doc_ids, cfg):
     c = cfg["concepts"]
     records = _backfill(records)
     df0, tot0 = _term_counts(records)
-    canon = _merge_map(df0, tot0, c["merge_ratio"])
+    canon = _merge_map(df0, tot0, c["merge_ratio"], _aliases(records, c["abbrev_max_zipf"]))
 
     labels = defaultdict(Counter)
     doc_terms, chunk_terms = {}, []  # chunk_terms: (rel, chunk index, set of terms)
@@ -276,7 +296,7 @@ def _concepts(g: Graph, records, doc_ids, cfg):
             dt.update(ct)
             chunk_terms.append((r["rel"], i, ct))
         for t, forms in r["concepts"]["labels"].items():
-            labels[canon[t]].update(forms)
+            labels[canon.get(t, t)].update(forms)  # an abbreviation's long form may never be counted
         doc_terms[r["rel"]] = dt
 
     n = len(records)
@@ -292,6 +312,14 @@ def _concepts(g: Graph, records, doc_ids, cfg):
     for ranked in tfidf.values():
         keep.update(t for t, _ in ranked[: c["keep_top_single"]])
     keep = {t for t in keep if not _generic(t, c["generic_zipf"])}
+    # common in *this* corpus, though not in English ("species" across a biology folder). A small folder about
+    # one subject has that subject everywhere ("home battery" in the sample), so only check bigger ones.
+    cdf = Counter(t for *_, ct in chunk_terms for t in ct)
+    common = sorted(t for t in keep if n >= c["common_min_docs"] and (
+        df[t] / n > c["max_doc_frac"] or cdf[t] / len(chunk_terms) > c["max_chunk_frac"]))
+    keep -= set(common)
+    g.dropped = [{"label": labels[t].most_common(1)[0][0], "docs": df[t], "chunk_frac": round(cdf[t] / len(chunk_terms), 3)}
+                 for t in common]
     # a term found only in the doc it titles is that doc, already a node ("Battery Storage Economics")
     only_in = {t: rel for rel, dt in doc_terms.items() for t in dt if df[t] == 1}
     keep = {t for t in keep if t not in only_in or t != g.nodes[doc_ids[only_in[t]]]["label"].lower()}

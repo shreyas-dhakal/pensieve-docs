@@ -17,6 +17,10 @@ DEFAULTS = {
         "max_tokens": 4,        # longest noun phrase kept
         "max_path": 4,          # concept pairs this many dependency arcs apart (or fewer) count as syntactically linked
         "hedge_words": ["may", "might", "could", "possibly", "potentially", "suggest"],
+        "max_doc_frac": 0.5,    # drop concepts in more than this share of documents...
+        "max_chunk_frac": 0.3,  # ...or in more than this share of chunks: too common here to tell documents apart...
+        "common_min_docs": 10,  # ...but only in folders of at least this many documents
+        "abbrev_max_zipf": 4.0,  # "long form (ABBR)" merges ABBR into the long form unless ABBR is this common a word
         "generic_zipf": 4.6,    # drop concepts whose every word is this common in English (wordfreq Zipf); 0 = off
         "stop_concepts": [      # boilerplate headings / filler that should never become concepts (lemmatised, lowercase)
             "abstract", "introduction", "summary", "overview", "background", "method", "result", "discussion",

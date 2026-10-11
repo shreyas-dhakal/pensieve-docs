@@ -238,3 +238,27 @@ def test_negated_and_hedged_links_weigh_less(tmp_path):
     hedge = _pair_edge(tmp_path / "hedge", "Heat pumps may reduce energy bills.")
     assert neg["negated_frac"] > 0 and neg["weight"] < pos["weight"] and neg["wcount"] < pos["wcount"]
     assert hedge["hedged_frac"] > 0 and neg["weight"] < hedge["weight"] < pos["weight"]
+
+
+def test_abbreviation_and_long_form_are_one_concept(tmp_path):
+    files = {"a.md": "# A\n\nWe fine-tuned a large language model (LLM) on legal contracts.\n",
+             "b.md": "# B\n\nThe LLM drafted the legal contracts overnight.\n",
+             "c.md": "# C\n\nAnother LLM summarised the minutes.\n"}
+    cfg = config.load()
+    cfg["concepts"]["generic_zipf"] = 0  # every word of "large language model" is everyday English
+    g = _build_dir(tmp_path, files, cfg)
+    concepts = {n["id"]: n for n in g["nodes"] if n["kind"] == "concept"}
+    assert "concept_llm" not in concepts
+    assert concepts["concept_large_language_model"]["doc_count"] == 3
+
+
+def test_concepts_common_across_the_corpus_are_dropped_and_reported(tmp_path):
+    # "zeolite" is rare English but in every document here; "membrane" and "catalyst" split the docs
+    files = {f"d{d}.md": f"# Doc {d}\n\nThe zeolite sample used a {'membrane' if d % 2 else 'catalyst'} filter.\n"
+             for d in range(10)}
+    g = _build_dir(tmp_path, files)
+    labels = {n["label"].lower() for n in g["nodes"] if n["kind"] == "concept"}
+    assert "zeolite sample" not in labels and "zeolite" not in labels
+    report = (tmp_path / "out" / "GRAPH_REPORT.md").read_text()
+    section = report.split("## Concepts dropped as too common")[1].split("##")[0]
+    assert "zeolite" in section
