@@ -98,7 +98,7 @@ def main(data: Path, out: Path):
     # related docs by shared concepts (what a recall badge would show)
     w = defaultdict(dict)
     sim, shares = defaultdict(dict), defaultdict(dict)
-    for e in (x for e in g["links"] for x in e["evidence"]):  # every rule's evidence, not only the headline
+    for e in (x for e in g["links"] for x in e.get("evidence", [e])):  # every rule's evidence, not only the headline
         if e["relation"] == "mentions":
             w[e["source"]][e["target"]] = e["weight"]
         elif e["relation"] in ("similar_to", "shares_concepts"):

@@ -143,7 +143,7 @@ The `.docx` to PDF citation came from a DOI hyperlink in the memo that matches t
 
 A concept is kept if it appears in at least `min_docs` documents or ranks in the top `keep_top_single` of its own document. A concept in at least `hyperedge_min_docs` documents also gets a hyperedge `{concept, docs…}` with `relation: participate_in`.
 
-Each pair of nodes has at most one edge. Every rule that produces the pair adds an entry to the edge's `evidence` list (up to `max_evidence`, strongest first), and the edge's own fields are copied from the strongest entry: the higher tier (EXTRACTED, then INFERRED, then AMBIGUOUS), then the higher `confidence_score`, then whichever came first. So two documents that cite each other share one `cites` edge with two entries, and a `net metering export rate` / `net metering` pair keeps its co-occurrence statistics next to the containment rule. Read `evidence` to find every rule behind an edge; `relation` alone shows only the strongest.
+Each pair of nodes has at most one edge. Every rule that produces the pair adds an entry to the edge's `evidence` list (up to `max_evidence`, strongest first), and the edge's own fields are copied from the strongest entry: the higher tier (EXTRACTED, then INFERRED, then AMBIGUOUS), then the higher `confidence_score`, then whichever came first. So two documents that cite each other share one `cites` edge with two entries, and a `net metering export rate` / `net metering` pair keeps its co-occurrence statistics next to the containment rule. Read `e.get("evidence", [e])` to find every rule behind an edge; `relation` alone shows only the strongest.
 
 ## Edge scoring
 
@@ -211,7 +211,7 @@ Every edge carries these fields:
 | `weight` | the raw TF-IDF, PMI, cosine, overlap or count, or 1 |
 | `strength` | the same evidence on one 0 to 1 scale: 1 for EXTRACTED, NPMI (floored at 0) for `co_occurs`, weight over the document's (or section's) largest for `mentions`, cosine for `similar_to`, overlap over the largest overlap for `shares_concepts`, the score for `is_a` and `conceptually_related_to` |
 | `source_file`, `chunk`, `source_location` | where the edge came from: `p3` is a PDF page, `L12` a line, `¶5` a docx paragraph |
-| `evidence` | every rule behind the edge, strongest first, each with all of the fields above plus its own `source` and `target` (direction matters for `cites` and `is_a`) |
+| `evidence` | every rule behind the edge, strongest first, each with all of the fields above plus its own `source` and `target` (direction matters for `cites` and `is_a`). Left out when the edge itself is the only entry, so read it as `e.get("evidence", [e])` |
 
 Some relations carry more:
 
@@ -276,7 +276,7 @@ Six unrelated topics make this an easy test. The weak spots are generic words th
 - DOCX tables, headers and footers are not read. Markdown tables are read as plain text.
 - PDFs are chunked one page at a time, with headings from the PDF outline. A PDF without an outline gets untitled page chunks.
 - Document similarity compares every pair (O(n²)). That is fine for thousands of documents; past that it needs an approximate nearest-neighbour index.
-- `graph.json` is large: every edge keeps an `evidence` list, and sections have `mentions` edges. The 60-article benchmark writes 18 MB.
+- `graph.json` is large: every edge keeps an `evidence` list, and sections have `mentions` edges. The 60-article benchmark writes 10 MB (4.7 MB before evidence and section mentions were added). Leaving section mentions out halves that but splits topics into more communities (inverse purity 0.70 to 0.67).
 - Verbs, negation, hedging and is-a patterns come from `en_core_web_sm`'s parse and tags, which miss things ("diseases such as malaria" is lost when malaria is tagged as an adjective) and invent others (`is_a` from "input" to "tenor").
 - Concepts are only as good as `en_core_web_sm` noun chunks. Synonyms such as "solar panels" and "photovoltaic panels" stay separate. A larger `spacy_model` or your own extractor will do better.
 

@@ -31,6 +31,9 @@ def test_graphify_compatible_shape(graph):
 
     G = nx.node_link_graph(graph, edges="links")  # list-valued `evidence` must not get in the way
     assert G.number_of_edges() == len(graph["links"])
+    # evidence is written only when there is more than the headline itself
+    assert all(len(e["evidence"]) > 1 for e in graph["links"] if "evidence" in e)
+    assert any("evidence" not in e for e in graph["links"]) and any("evidence" in e for e in graph["links"])
     for n in graph["nodes"]:
         assert {"id", "label", "norm_label", "file_type", "kind", "community", "community_name", "source_file"} <= n.keys()
     docs = [n for n in graph["nodes"] if n["kind"] == "document"]
@@ -52,7 +55,7 @@ def test_every_edge_has_type_weight_confidence_tier_provenance(graph):
         else:
             assert tier == "AMBIGUOUS" and 0.1 <= score <= 0.3
         assert (SAMPLE / e["source_file"]).exists()
-        for x in e["evidence"]:  # one 0..1 scale across rules, raw statistic kept under its own name
+        for x in e.get("evidence", [e]):  # one 0..1 scale across rules, raw statistic kept under its own name
             assert 0 <= x["strength"] <= 1
             assert x["confidence"] != "EXTRACTED" or x["strength"] == 1
             raw = {"co_occurs": "pmi", "mentions": "tfidf" if x["source"] in docs else "count",
@@ -99,7 +102,7 @@ def test_similarity_threshold_and_top_k(tmp_path):
     cfg["similarity"].update(top_k=1, threshold=0.2, ambiguous_min=0.1)
     build(SAMPLE, cfg, tmp_path)
     g = json.loads((tmp_path / "graph.json").read_text())
-    sims = [x for e in g["links"] for x in e["evidence"] if x["relation"] == "similar_to"]  # often under shares_concepts
+    sims = [x for e in g["links"] for x in e.get("evidence", [e]) if x["relation"] == "similar_to"]  # often under shares_concepts
     assert sims and len(sims) <= sum(1 for n in g["nodes"] if n["kind"] == "document")
     for e in sims:
         assert (e["weight"] >= 0.2) == (e["confidence"] == "INFERRED")
@@ -208,7 +211,7 @@ def test_nested_pair_keeps_cooccurrence_evidence(tmp_path):
     files = {f"d{d}.md": f"# Doc {d}\n\n" + body.format(d) + "".join(_FILLER.format(k) for k in range(4)) for d in range(3)}
     g = _build_dir(tmp_path, files)
     (e,) = [e for e in g["links"] if {e["source"], e["target"]} == {"concept_solar_inverter", "concept_inverter"}]
-    by_rel = {x["relation"]: x for x in e["evidence"]}
+    by_rel = {x["relation"]: x for x in e.get("evidence", [e])}
     assert by_rel.keys() == {"conceptually_related_to", "co_occurs"}
     co = by_rel["co_occurs"]
     assert co["count"] == 3 and co["npmi"] > 0 and len(co["chunks"]) == 3
@@ -281,7 +284,7 @@ def test_hearst_patterns_make_is_a_from_specific_to_general(tmp_path):
              "".join(_FILLER.format(k) for k in range(3)) for d in range(3)}
     g = _build_dir(tmp_path, files)
     (e,) = [e for e in g["links"] if {e["source"], e["target"]} == {"concept_mosquito", "concept_pest"}]
-    isa = [x for x in e["evidence"] if x["relation"] == "is_a"]
+    isa = [x for x in e.get("evidence", [e]) if x["relation"] == "is_a"]
     assert len(isa) == 3 and {x["source_file"] for x in isa} == {"d0.md", "d1.md", "d2.md"}
     for x in isa:
         assert (x["source"], x["target"]) == ("concept_mosquito", "concept_pest")
@@ -296,7 +299,7 @@ def test_cooccurrence_marks_the_broader_concept(tmp_path):
     files = {f"d{d}.md": f"# Doc {d}\n\n## Bite\n\nWe saw anopheles. We saw a mosquito.\n\n"
              "## Hum\n\nWe saw a mosquito again.\n\n" + "".join(_FILLER.format(k) for k in range(3)) for d in range(3)}
     g = _build_dir(tmp_path, files)
-    (e,) = [x for e in g["links"] for x in e["evidence"] if x["relation"] == "co_occurs"
+    (e,) = [x for e in g["links"] for x in e.get("evidence", [e]) if x["relation"] == "co_occurs"
             and {x["source"], x["target"]} == {"concept_anophele", "concept_mosquito"}]  # spaCy's lemma
     assert e["p_b_given_a"] == 1.0 and e["p_a_given_b"] == 0.5  # a = anopheles, b = mosquito
     assert e["broader"] == "concept_mosquito"
@@ -311,7 +314,7 @@ def test_documents_sharing_concepts_are_linked_with_reasons(graph):
     for e in graph["links"]:
         if e["relation"] == "mentions" and e["source"] in docs:
             w.setdefault(e["source"], {})[e["target"]] = e["weight"]
-    shares = [x for e in graph["links"] for x in e["evidence"] if x["relation"] == "shares_concepts"]
+    shares = [x for e in graph["links"] for x in e.get("evidence", [e]) if x["relation"] == "shares_concepts"]
     assert shares
     for x in shares:
         # same score related.py and bench/eval.py rank by

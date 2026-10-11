@@ -22,7 +22,9 @@ def graph_json(g, a: dict, meta: dict) -> dict:
         c = a["community"][n["id"]]
         norm = "".join(ch for ch in unicodedata.normalize("NFKD", n["label"]) if not unicodedata.combining(ch)).lower()
         nodes.append(_canonical({**n, "community": c, "community_name": a["names"][c], "norm_label": norm}, ("id", "label")))
-    links = [_canonical(e, ("source", "target", "relation")) for e in g.edges.values()]
+    # one entry is the headline itself: leave it out (read `e.get("evidence", [e])`)
+    links = [_canonical({k: v for k, v in e.items() if k != "evidence" or len(v) > 1}, ("source", "target", "relation"))
+             for e in g.edges.values()]
     hyper = sorted(g.hyperedges, key=lambda h: h["id"])
     return {
         "directed": False,
