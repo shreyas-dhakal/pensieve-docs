@@ -366,16 +366,37 @@ def _concepts(g: Graph, records, doc_ids, cfg):
             if a != b:
                 links[(r["rel"], i)].append((a, b, verb, neg, hedged))
 
+    _isa(g, records, canon, set(docs_of), recs, cfg["hierarchy"])
     _nested(g, set(docs_of))
-    _cooccur(g, chunk_terms, links, set(docs_of), recs, cfg["cooccur"])
+    _cooccur(g, chunk_terms, links, set(docs_of), recs, cfg)
+
+
+def _isa(g: Graph, records, canon: dict, concepts: set, recs, h: dict):
+    """IS_A from specific to general, from Hearst patterns ("X such as Y", "Y and other X", "Y is a X").
+    One evidence entry per matching sentence; a pair matched min_strong times or more scores higher."""
+    hits = defaultdict(list)
+    for r in records:
+        for y, x, i, start, end in r["concepts"].get("isa", []):
+            y, x = canon.get(y, y), canon.get(x, x)
+            if y != x and y in concepts and x in concepts:
+                hits[(y, x)].append((r["rel"], i, start, end))
+    for (y, x), hs in sorted(hits.items()):
+        score = h["isa_strong_score"] if len(hs) >= h["isa_min_strong"] else h["isa_score"]
+        for rel, i, start, end in hs[: g.max_evidence]:
+            p = recs[rel]["parsed"]
+            g.edge("concept_" + slug(y), "concept_" + slug(x), "is_a", "INFERRED", score, len(hs), rel, i,
+                   location(p["chunks"][i], p["doc_type"]), matches=len(hs), sentence=[start, end])
 
 
 def _nested(g: Graph, concepts: set):
     """'net metering export rate' -> 'net metering': a concept whose words contain another one.
     Longest-match counting hides the shorter term inside the longer one; this edge keeps them connected."""
-    for a in concepts:
+    by_first = defaultdict(list)  # first word -> concepts starting with it: only those can sit inside another
+    for b in sorted(concepts):
+        by_first[b.split()[0]].append(b)
+    for a in sorted(concepts):
         ta = f" {a} "
-        for b in concepts:
+        for b in sorted({b for w in set(a.split()) for b in by_first[w]}):
             if b != a and f" {b} " in ta:
                 n = g.nodes["concept_" + slug(a)]
                 g.edge(n["id"], "concept_" + slug(b), "conceptually_related_to", "INFERRED", 0.85, 1.0,
@@ -387,11 +408,11 @@ def _omega(neg: bool, hedged: bool, cc) -> float:
     return (1 + cc["syntax_boost"]) * (1 - cc["negation_penalty"] * neg) * (1 - cc["hedge_penalty"] * hedged)
 
 
-def _cooccur(g: Graph, chunk_terms, links, concepts: set, recs, cc):
+def _cooccur(g: Graph, chunk_terms, links, concepts: set, recs, cfg):
     """CO_OCCURS between concepts that share chunks. weight = PMI, tier by NPMI.
     A shared chunk counts 1, or the best _omega of the pair's short dependency paths in it.
     `chunks` lists the shared chunks (first max_evidence) as [source_file, chunk, source_location]."""
-    total, max_where = len(chunk_terms), g.max_evidence
+    cc, total, max_where = cfg["cooccur"], len(chunk_terms), g.max_evidence
     single, pair, wpair, where, by_doc = Counter(), Counter(), Counter(), defaultdict(list), defaultdict(Counter)
     syn = defaultdict(list)  # pair -> [(verb, negated, hedged)] over all its short paths
     for rel, i, ct in chunk_terms:
@@ -437,7 +458,18 @@ def _cooccur(g: Graph, chunk_terms, links, concepts: set, recs, cc):
         score = bucket((npmi - thr) / (1 - thr)) if tier == "INFERRED" else ambiguous_score(npmi / thr)
         g.edge("concept_" + slug(a), "concept_" + slug(b), "co_occurs", tier, score, pmi, *locs[0],
                npmi=round(npmi, 4), count=k, wcount=round(wpair[(a, b)], 4), n_docs=len(docs),
-               max_doc_share=round(max(docs.values()) / k, 4), chunks=locs, **_syntax(syn[(a, b)], cc))
+               max_doc_share=round(max(docs.values()) / k, 4), chunks=locs, **_syntax(syn[(a, b)], cc),
+               **_broader(a, b, k / single[a], k / single[b], cfg["hierarchy"]["broader_min"]))
+
+
+def _broader(a: str, b: str, p_b_a: float, p_a_b: float, thr: float) -> dict:
+    """P(b | a) and P(a | b) over chunks; b is broader when a (almost) always comes with b but not the reverse."""
+    out = {"p_b_given_a": round(p_b_a, 4), "p_a_given_b": round(p_a_b, 4)}
+    if p_b_a >= thr > p_a_b:
+        out["broader"] = "concept_" + slug(b)
+    elif p_a_b >= thr > p_b_a:
+        out["broader"] = "concept_" + slug(a)
+    return out
 
 
 def _syntax(occ: list, cc) -> dict:

@@ -6,6 +6,8 @@ import pytest
 
 from pensieve_docs import config
 from pensieve_docs.build import build
+from pensieve_docs.concepts import clean
+from pensieve_docs.parse import parse_file
 from pensieve_docs.edges import RUBRIC, Graph
 
 SAMPLE = Path(__file__).parent.parent / "examples" / "sample"
@@ -262,3 +264,29 @@ def test_concepts_common_across_the_corpus_are_dropped_and_reported(tmp_path):
     report = (tmp_path / "out" / "GRAPH_REPORT.md").read_text()
     section = report.split("## Concepts dropped as too common")[1].split("##")[0]
     assert "zeolite" in section
+
+
+def test_hearst_patterns_make_is_a_from_specific_to_general(tmp_path):
+    files = {f"d{d}.md": f"# Doc {d}\n\n## Night\n\nIt was dark. Pests such as mosquitoes bite at night.\n\n" +
+             "".join(_FILLER.format(k) for k in range(3)) for d in range(3)}
+    g = _build_dir(tmp_path, files)
+    (e,) = [e for e in g["links"] if {e["source"], e["target"]} == {"concept_mosquito", "concept_pest"}]
+    isa = [x for x in e["evidence"] if x["relation"] == "is_a"]
+    assert len(isa) == 3 and {x["source_file"] for x in isa} == {"d0.md", "d1.md", "d2.md"}
+    for x in isa:
+        assert (x["source"], x["target"]) == ("concept_mosquito", "concept_pest")
+        assert x["confidence"] == "INFERRED" and x["confidence_score"] == 0.85 and x["matches"] == 3
+        start, end = x["sentence"]  # character span of the sentence in the chunk's cleaned text
+        text = clean(parse_file(tmp_path / x["source_file"], 4000)["chunks"][x["chunk"]])
+        assert text[start:end].strip() == "Pests such as mosquitoes bite at night."
+
+
+def test_cooccurrence_marks_the_broader_concept(tmp_path):
+    # anopheles never appears without mosquito; mosquito often appears alone
+    files = {f"d{d}.md": f"# Doc {d}\n\n## Bite\n\nWe saw anopheles. We saw a mosquito.\n\n"
+             "## Hum\n\nWe saw a mosquito again.\n\n" + "".join(_FILLER.format(k) for k in range(3)) for d in range(3)}
+    g = _build_dir(tmp_path, files)
+    (e,) = [x for e in g["links"] for x in e["evidence"] if x["relation"] == "co_occurs"
+            and {x["source"], x["target"]} == {"concept_anophele", "concept_mosquito"}]  # spaCy's lemma
+    assert e["p_b_given_a"] == 1.0 and e["p_a_given_b"] == 0.5  # a = anopheles, b = mosquito
+    assert e["broader"] == "concept_mosquito"

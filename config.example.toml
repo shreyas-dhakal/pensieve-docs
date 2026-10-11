@@ -44,6 +44,11 @@ label_share = 0.6           # relation_label = a verb with at least this share o
 label_min = 2               # ...seen at least this many times
 min_docs_inferred = 2       # pairs found in fewer documents -> AMBIGUOUS co_occurs; 1 = off
 
+[hierarchy]
+broader_min = 0.8           # co_occurs gets broader = b when P(b | a) >= this and P(a | b) < this
+isa_score = 0.65            # is_a edges from "X such as Y", "Y and other X", "X including Y", "Y is a X"...
+isa_strong_score = 0.85     # ...scored higher when matched in at least isa_min_strong sentences
+isa_min_strong = 3
 
 [report]
 top_n = 15

@@ -46,6 +46,12 @@ DEFAULTS = {
         "label_min": 2,         # ...and at least this many occurrences
         "min_docs_inferred": 2,  # pairs found in fewer documents -> AMBIGUOUS (unless the corpus is one document)
     },
+    "hierarchy": {
+        "broader_min": 0.8,     # co_occurs gets broader = b when P(b | a) >= this and P(a | b) < this
+        "isa_score": 0.65,      # is_a from Hearst patterns ("X such as Y")...
+        "isa_strong_score": 0.85,  # ...and when matched in at least isa_min_strong sentences
+        "isa_min_strong": 3,
+    },
     "hyperedge_min_docs": 3,
     "max_evidence": 10,         # evidence entries kept per edge (and shared chunks listed per co_occurs)
     "report": {"top_n": 15},

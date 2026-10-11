@@ -7,6 +7,7 @@ Extractor interface (any dotted path in config `concepts.extractors`):
         "bow":    {lemma: count}            # bag of words for TF-IDF similarity
         "rels":   [[a, b, verb|None, negated, hedged, chunk], ...]  # optional: concept pairs close in a parse
         "abbrevs": [[short norm, long norm], ...]  # optional: "large language model (LLM)"
+        "isa":    [[specific, general, chunk, sentence start, end], ...]  # optional: "X such as Y", "Y is a X"
     }
 Results are cached per file, so extractors must be deterministic for a given file content.
 """
@@ -16,7 +17,7 @@ from itertools import combinations
 
 from .parse import REFLINE, is_ref_heading
 
-VERSION = 8  # bump when extraction output changes, to invalidate the per-file cache
+VERSION = 9  # bump when extraction output changes, to invalidate the per-file cache
 SKIP_ENTS = {"CARDINAL", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY", "ORDINAL"}
 _EDGE_POS = {"DET", "PRON", "ADP", "CCONJ", "PUNCT", "NUM", "PART", "SYM", "SPACE", "ADV"}
 _CLEAN = [
@@ -36,7 +37,8 @@ def nlp(name: str):
     return _nlp[name]
 
 
-def _norm(span, max_tokens: int, stop: set) -> tuple[str, str] | None:
+def _trim(span) -> list:
+    """The span's tokens without leading/trailing stopwords and punctuation ("the other mosquitoes" -> mosquitoes)."""
     toks = list(span)
     breaks = [i for i, t in enumerate(toks) if "\n" in t.text]
     if breaks:  # spans glued across lines ("Abstract\nRooftop solar"): keep the part with the head noun
@@ -45,6 +47,11 @@ def _norm(span, max_tokens: int, stop: set) -> tuple[str, str] | None:
         toks.pop(0)
     while toks and (toks[-1].is_stop or toks[-1].pos_ in _EDGE_POS or not toks[-1].text.strip("-'")):
         toks.pop()
+    return toks
+
+
+def _norm(span, max_tokens: int, stop: set) -> tuple[str, str] | None:
+    toks = _trim(span)
     if not toks or len(toks) > max_tokens or not any(t.is_alpha for t in toks) or any(t.like_url or t.like_email for t in toks):
         return None
     ws = [t.whitespace_ and " " for t in toks[:-1]] + [""]  # keep "lithium-ion" hyphenation
@@ -86,6 +93,38 @@ def _rels(sent_spans, max_path: int, hedges: set, chunk: int) -> list:
         hedged = any(t.lemma_.lower() in hedges or t.lower_ in hedges for t in ctx)
         out.append([a, b, verb, neg, hedged, chunk])
     return out
+
+
+# Hearst (1992) patterns, as the words between two concepts of one sentence
+_SUCH = {("such", "as"), (",", "such", "as"), ("including",), (",", "including")}  # X such as Y
+_OTHER = {("and", "other"), ("or", "other")}  # Y and other X
+_ISA = {("is", "a"), ("is", "an")}  # Y is a X
+_LIST = {(",",), ("and",), ("or",), (",", "and"), (",", "or")}  # Y, Z and W
+
+
+def _hearst(doc, items: list, chunk: int) -> list:
+    """[specific, general, chunk, sentence start, sentence end] from one sentence's concepts [(span, norm)]."""
+    cores = [(t[0].i, t[-1].i + 1, n) for sp, n in items if (t := _trim(sp))]
+    gap = lambda k: tuple(t.lower_ for t in doc[cores[k][1]:cores[k + 1][0]] if not t.is_space)
+    pairs = []
+    for k in range(len(cores) - 1):
+        if gap(k) in _SUCH:  # X such as Y, Z and W
+            j = k + 1
+            pairs.append((j, k))
+            while j + 1 < len(cores) and gap(j) in _LIST:
+                j += 1
+                pairs.append((j, k))
+        elif gap(k) in _OTHER:  # Y, Z and other X
+            j = k
+            pairs.append((j, k + 1))
+            while j > 0 and gap(j - 1) in _LIST:
+                j -= 1
+                pairs.append((j, k + 1))
+        elif gap(k) in _ISA:  # Y is a X
+            pairs.append((k, k + 1))
+    sent = items[0][0].sent if items else None
+    return [[cores[y][2], cores[x][2], chunk, sent.start_char, sent.end_char]
+            for y, x in pairs if cores[y][2] != cores[x][2]]
 
 
 _PAREN = re.compile(r"\(([^()]{2,10})\)")
@@ -148,7 +187,7 @@ def extract(chunks: list[dict], cfg: dict) -> dict:
 
     stop = {w.lower() for w in c["stop_concepts"]}
     hedges = {w.lower() for w in c["hedge_words"]}
-    terms, labels, bow, rels, abbrevs = [], {}, Counter(), [], []
+    terms, labels, bow, rels, abbrevs, isa = [], {}, Counter(), [], [], []
     for ci, (doc, head) in enumerate(zip(nlp(c["spacy_model"]).pipe(texts, batch_size=32), heads)):
         counts, by_sent = Counter(), defaultdict(list)
         # longest non-overlapping spans, so an entity inside a noun chunk is not double counted
@@ -172,5 +211,6 @@ def extract(chunks: list[dict], cfg: dict) -> dict:
                 labels.setdefault(n, Counter())[t] += 0
         for k in sorted(by_sent):
             rels += _rels(by_sent[k], c["max_path"], hedges, ci)
+            isa += _hearst(doc, sorted(by_sent[k], key=lambda x: x[0].start), ci)
         bow.update(t.lemma_.lower() for t in doc if t.is_alpha and not t.is_stop and len(t) > 2)
-    return {"terms": terms, "labels": {k: dict(v) for k, v in labels.items()}, "bow": dict(bow), "rels": rels, "abbrevs": abbrevs}
+    return {"terms": terms, "labels": {k: dict(v) for k, v in labels.items()}, "bow": dict(bow), "rels": rels, "abbrevs": abbrevs, "isa": isa}
