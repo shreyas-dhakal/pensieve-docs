@@ -40,6 +40,7 @@ def test_graphify_compatible_shape(graph):
 
 
 def test_every_edge_has_type_weight_confidence_tier_provenance(graph):
+    docs = {n["id"] for n in graph["nodes"] if n["kind"] == "document"}
     for e in graph["links"]:
         assert {"source", "target", "relation", "confidence", "confidence_score", "weight", "source_file",
                 "source_location", "chunk"} <= e.keys()
@@ -51,6 +52,14 @@ def test_every_edge_has_type_weight_confidence_tier_provenance(graph):
         else:
             assert tier == "AMBIGUOUS" and 0.1 <= score <= 0.3
         assert (SAMPLE / e["source_file"]).exists()
+        for x in e["evidence"]:  # one 0..1 scale across rules, raw statistic kept under its own name
+            assert 0 <= x["strength"] <= 1
+            assert x["confidence"] != "EXTRACTED" or x["strength"] == 1
+            raw = {"co_occurs": "pmi", "mentions": "tfidf" if x["source"] in docs else "count",
+                   "similar_to": "cosine", "shares_concepts": "overlap"}.get(x["relation"])
+            assert raw is None or x[raw] == x["weight"]
+            if x["relation"] == "co_occurs":
+                assert x["strength"] == max(0, x["npmi"])
     assert {e["relation"] for e in graph["links"]} == {
         "contains", "has_section", "links_to", "cites", "mentions", "co_occurs", "similar_to", "conceptually_related_to",
         "shares_concepts"}

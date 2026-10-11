@@ -50,11 +50,14 @@ class Graph:
     def node(self, nid: str, **attrs):
         self.nodes.setdefault(nid, {"id": nid}).update(attrs)
 
-    def edge(self, src, tgt, relation, tier, score, weight, source_file, chunk=None, source_location=None, **extra):
+    def edge(self, src, tgt, relation, tier, score, weight, source_file, chunk=None, source_location=None,
+             strength=None, **extra):
+        """strength: the rule's statistic on one 0..1 scale, for clustering (default 1 if EXTRACTED, else score)."""
         if src == tgt:
             return
         key = frozenset((src, tgt))
-        ev = {"source": src, "target": tgt, "relation": relation,
+        strength = (1.0 if tier == "EXTRACTED" else score) if strength is None else min(1.0, max(0.0, strength))
+        ev = {"source": src, "target": tgt, "relation": relation, "strength": round(strength, 4),
               "confidence": tier, "confidence_score": round(score, 2), "weight": round(weight, 4),
               "source_file": source_file, "source_location": source_location, "chunk": chunk, **extra}
         evs = self.edges[key]["evidence"] if key in self.edges else []
@@ -341,7 +344,7 @@ def _concepts(g: Graph, records, doc_ids, cfg):
             cid = "concept_" + slug(t)
             i = best_chunk[(rel, t)][0]
             loc = location(p["chunks"][i], p["doc_type"])
-            g.edge(doc_ids[rel], cid, "mentions", "INFERRED", bucket(w / top), w, rel, i, loc)
+            g.edge(doc_ids[rel], cid, "mentions", "INFERRED", bucket(w / top), w, rel, i, loc, strength=w / top, tfidf=round(w, 4))
             docs_of[t].append((rel, w, i, loc))
             doc_w[rel][t] = (w, i, loc)
 
@@ -404,7 +407,7 @@ def _shares(g: Graph, doc_w: dict, doc_ids: dict, sc: dict):
                    "locations": [[a, *doc_w[a][t][1:]], [b, *doc_w[b][t][1:]]]} for w, t in scores[(a, b)][:3]]
         _, i, loc = doc_w[a][scores[(a, b)][0][1]]
         g.edge(doc_ids[a], doc_ids[b], "shares_concepts", "INFERRED", bucket(total[(a, b)] / top), total[(a, b)],
-               a, i, loc, shared=shared)
+               a, i, loc, strength=total[(a, b)] / top, overlap=round(total[(a, b)], 4), shared=shared)
 
 
 def _section_mentions(g: Graph, chunk_terms, doc_w: dict, recs):
@@ -423,7 +426,7 @@ def _section_mentions(g: Graph, chunk_terms, doc_w: dict, recs):
         top = max(here.values())
         for t, k in sorted(here.items()):
             g.edge(sid, "concept_" + slug(t), "mentions", "INFERRED", bucket(k / top), k, rel, i,
-                   g.nodes[sid]["source_location"], count=k)
+                   g.nodes[sid]["source_location"], strength=k / top, count=k)
 
 
 def _isa(g: Graph, records, canon: dict, concepts: set, recs, h: dict):
@@ -512,7 +515,7 @@ def _cooccur(g: Graph, chunk_terms, links, concepts: set, recs, cfg):
         tier = "INFERRED" if npmi >= thr and len(docs) >= min_docs else "AMBIGUOUS"
         score = bucket((npmi - thr) / (1 - thr)) if tier == "INFERRED" else ambiguous_score(npmi / thr)
         g.edge("concept_" + slug(a), "concept_" + slug(b), "co_occurs", tier, score, pmi, *locs[0],
-               npmi=round(npmi, 4), count=k, wcount=round(wpair[(a, b)], 4), n_docs=len(docs),
+               strength=max(0.0, npmi), pmi=round(pmi, 4), npmi=round(npmi, 4), count=k, wcount=round(wpair[(a, b)], 4), n_docs=len(docs),
                max_doc_share=round(max(docs.values()) / k, 4), chunks=locs, **_syntax(syn[(a, b)], cc),
                **_broader(a, b, k / single[a], k / single[b], cfg["hierarchy"]["broader_min"]))
 
@@ -587,4 +590,4 @@ def _similarity(g: Graph, records, doc_ids, cfg):
                 break
             a, b = sorted((i, j))
             g.edge(doc_ids[records[a]["rel"]], doc_ids[records[b]["rel"]], "similar_to", tier, score, sim,
-                   records[a]["rel"], method=s["method"])
+                   records[a]["rel"], strength=sim, cosine=round(sim, 4), method=s["method"])
