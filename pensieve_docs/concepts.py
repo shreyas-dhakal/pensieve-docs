@@ -5,15 +5,17 @@ Extractor interface (any dotted path in config `concepts.extractors`):
         "terms":  [ {norm: count}, ... ]   # one dict per chunk, same order as chunks
         "labels": {norm: {surface: count}}  # display forms
         "bow":    {lemma: count}            # bag of words for TF-IDF similarity
+        "rels":   [[a, b, verb|None, negated, hedged, chunk], ...]  # optional: concept pairs close in a parse
     }
 Results are cached per file, so extractors must be deterministic for a given file content.
 """
 import re
-from collections import Counter
+from collections import Counter, defaultdict
+from itertools import combinations
 
 from .parse import REFLINE, is_ref_heading
 
-VERSION = 6  # bump when extraction output changes, to invalidate the per-file cache
+VERSION = 7  # bump when extraction output changes, to invalidate the per-file cache
 SKIP_ENTS = {"CARDINAL", "DATE", "TIME", "PERCENT", "MONEY", "QUANTITY", "ORDINAL"}
 _EDGE_POS = {"DET", "PRON", "ADP", "CCONJ", "PUNCT", "NUM", "PART", "SYM", "SPACE", "ADV"}
 _CLEAN = [
@@ -51,6 +53,40 @@ def _norm(span, max_tokens: int, stop: set) -> tuple[str, str] | None:
     return norm, "".join(t.text + w for t, w in zip(toks, ws))
 
 
+_NEG = {"no", "not", "never", "without", "n't"}
+
+
+def _path(x, y) -> list | None:
+    """Tokens on the dependency path from x up to their lowest common ancestor and down to y."""
+    up = [x, *x.ancestors]
+    seen = {t.i: k for k, t in enumerate(up)}
+    down = [y]
+    while down[-1].i not in seen:
+        if down[-1].head.i == down[-1].i:
+            return None  # different sentences' roots
+        down.append(down[-1].head)
+    return up[: seen[down[-1].i] + 1] + down[-2::-1]
+
+
+def _rels(sent_spans, max_path: int, hedges: set, chunk: int) -> list:
+    """[a, b, verb, negated, hedged, chunk] for concept spans of one sentence joined by a short dependency path."""
+    out = []
+    for (sa, a), (sb, b) in combinations(sent_spans, 2):
+        if a == b:
+            continue
+        if b < a:
+            (sa, a), (sb, b) = (sb, b), (sa, a)
+        path = _path(sa.root, sb.root)
+        if path is None or len(path) - 1 > max_path:
+            continue
+        verb = next((t.lemma_.lower() for t in path if t.pos_ == "VERB"), None)
+        ctx = path + [c for t in path for c in t.children]  # "do *not* reduce", "*no* heat pump", "*may* reduce"
+        neg = any(t.dep_ == "neg" or t.lower_ in _NEG or t.lemma_.lower() in _NEG for t in ctx)
+        hedged = any(t.lemma_.lower() in hedges or t.lower_ in hedges for t in ctx)
+        out.append([a, b, verb, neg, hedged, chunk])
+    return out
+
+
 def clean(ch: dict) -> str:
     """Chunk prose as the extractor sees it: heading + text, markup and links stripped.
     Reference lists are left out: they already become `cites` edges, and their titles are not this doc's ideas."""
@@ -71,9 +107,10 @@ def extract(chunks: list[dict], cfg: dict) -> dict:
     from spacy.util import filter_spans
 
     stop = {w.lower() for w in c["stop_concepts"]}
-    terms, labels, bow = [], {}, Counter()
-    for doc, head in zip(nlp(c["spacy_model"]).pipe(texts, batch_size=32), heads):
-        counts = Counter()
+    hedges = {w.lower() for w in c["hedge_words"]}
+    terms, labels, bow, rels = [], {}, Counter(), []
+    for ci, (doc, head) in enumerate(zip(nlp(c["spacy_model"]).pipe(texts, batch_size=32), heads)):
+        counts, by_sent = Counter(), defaultdict(list)
         # longest non-overlapping spans, so an entity inside a noun chunk is not double counted
         nc = list(doc.noun_chunks)
         # "coefficient of performance": spaCy splits at "of"; join when the whole still fits max_tokens
@@ -87,6 +124,9 @@ def extract(chunks: list[dict], cfg: dict) -> dict:
             if r:
                 counts[r[0]] += 1
                 labels.setdefault(r[0], Counter())[r[1]] += 1
+                by_sent[span.sent.start].append((span, r[0]))
         terms.append(dict(counts))
+        for k in sorted(by_sent):
+            rels += _rels(by_sent[k], c["max_path"], hedges, ci)
         bow.update(t.lemma_.lower() for t in doc if t.is_alpha and not t.is_stop and len(t) > 2)
-    return {"terms": terms, "labels": {k: dict(v) for k, v in labels.items()}, "bow": dict(bow)}
+    return {"terms": terms, "labels": {k: dict(v) for k, v in labels.items()}, "bow": dict(bow), "rels": rels}

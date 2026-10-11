@@ -22,7 +22,7 @@ def _load(path: str):
 
 def _extract(chunks, cfg) -> dict:
     """Run every configured extractor and sum their results."""
-    out = {"terms": [Counter() for _ in chunks], "labels": {}, "bow": Counter()}
+    out = {"terms": [Counter() for _ in chunks], "labels": {}, "bow": Counter(), "rels": []}
     for path in cfg["concepts"]["extractors"]:
         r = _load(path)(chunks, cfg)
         for acc, terms in zip(out["terms"], r["terms"]):
@@ -30,13 +30,14 @@ def _extract(chunks, cfg) -> dict:
         for k, forms in r["labels"].items():
             out["labels"].setdefault(k, Counter()).update(forms)
         out["bow"].update(r["bow"])
+        out["rels"] += r.get("rels", [])
     return {"terms": [dict(t) for t in out["terms"]], "labels": {k: dict(v) for k, v in out["labels"].items()},
-            "bow": dict(out["bow"])}
+            "bow": dict(out["bow"]), "rels": out["rels"]}
 
 
 def _cache_tag(cfg) -> str:
     c = cfg["concepts"]
-    return json.dumps([parse.VERSION, concepts.VERSION, cfg["chunk"]["max_chars"], c["extractors"], c["spacy_model"], c["max_tokens"], c["stop_concepts"]])
+    return json.dumps([parse.VERSION, concepts.VERSION, cfg["chunk"]["max_chars"], c["extractors"], c["spacy_model"], c["max_tokens"], c["stop_concepts"], c["max_path"], c["hedge_words"]])
 
 
 def _git_head(root: Path):

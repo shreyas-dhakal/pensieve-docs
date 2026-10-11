@@ -331,8 +331,15 @@ def _concepts(g: Graph, records, doc_ids, cfg):
                 "source_file": files[0], "source_files": files,
             })
 
+    links = defaultdict(list)  # (rel, chunk) -> [(a, b, verb, negated, hedged)] with merged, sorted concept names
+    for r in records:
+        for a, b, verb, neg, hedged, i in r["concepts"].get("rels", []):
+            a, b = sorted((canon.get(a, a), canon.get(b, b)))
+            if a != b:
+                links[(r["rel"], i)].append((a, b, verb, neg, hedged))
+
     _nested(g, set(docs_of))
-    _cooccur(g, chunk_terms, set(docs_of), recs, cfg["cooccur"])
+    _cooccur(g, chunk_terms, links, set(docs_of), recs, cfg["cooccur"])
 
 
 def _nested(g: Graph, concepts: set):
@@ -347,16 +354,28 @@ def _nested(g: Graph, concepts: set):
                        n["source_file"], None, n["source_location"])
 
 
-def _cooccur(g: Graph, chunk_terms, concepts: set, recs, cc):
+def _omega(neg: bool, hedged: bool, cc) -> float:
+    """How much one syntactically linked mention counts: more than plain co-presence, less if negated or hedged."""
+    return (1 + cc["syntax_boost"]) * (1 - cc["negation_penalty"] * neg) * (1 - cc["hedge_penalty"] * hedged)
+
+
+def _cooccur(g: Graph, chunk_terms, links, concepts: set, recs, cc):
     """CO_OCCURS between concepts that share chunks. weight = PMI, tier by NPMI.
+    A shared chunk counts 1, or the best _omega of the pair's short dependency paths in it.
     `chunks` lists the shared chunks (first max_evidence) as [source_file, chunk, source_location]."""
     total, max_where = len(chunk_terms), g.max_evidence
-    single, pair, where, by_doc = Counter(), Counter(), defaultdict(list), defaultdict(Counter)
+    single, pair, wpair, where, by_doc = Counter(), Counter(), Counter(), defaultdict(list), defaultdict(Counter)
+    syn = defaultdict(list)  # pair -> [(verb, negated, hedged)] over all its short paths
     for rel, i, ct in chunk_terms:
         present = sorted(t for t in ct if t in concepts)
         single.update(present)
+        here = defaultdict(list)
+        for a, b, verb, neg, hedged in links.get((rel, i), ()):
+            here[(a, b)].append((verb, neg, hedged))
         for a, b in combinations(present, 2):
             pair[(a, b)] += 1
+            wpair[(a, b)] += max((_omega(n, h, cc) for _, n, h in here[(a, b)]), default=1.0)
+            syn[(a, b)] += here[(a, b)]
             by_doc[(a, b)][rel] += 1
             if len(where[(a, b)]) < max_where:
                 where[(a, b)].append((rel, i))
@@ -364,9 +383,9 @@ def _cooccur(g: Graph, chunk_terms, concepts: set, recs, cc):
     for (a, b), k in pair.items():
         if k < cc["min_count"]:
             continue  # one shared chunk is noise, not even AMBIGUOUS
-        pab = k / total
+        pab = wpair[(a, b)] / total
         pmi = math.log(pab / ((single[a] / total) * (single[b] / total)))
-        npmi = pmi / -math.log(pab) if pab < 1 else 1.0
+        npmi = min(1.0, pmi / -math.log(pab)) if pab < 1 else 1.0  # boosted counts can push pab past p(a)
         if pmi > 0:
             stats[(a, b)] = (pmi, npmi, k)
     partners = defaultdict(list)
@@ -389,8 +408,22 @@ def _cooccur(g: Graph, chunk_terms, concepts: set, recs, cc):
         tier = "INFERRED" if npmi >= thr and len(docs) >= min_docs else "AMBIGUOUS"
         score = bucket((npmi - thr) / (1 - thr)) if tier == "INFERRED" else ambiguous_score(npmi / thr)
         g.edge("concept_" + slug(a), "concept_" + slug(b), "co_occurs", tier, score, pmi, *locs[0],
-               npmi=round(npmi, 4), count=k, n_docs=len(docs), max_doc_share=round(max(docs.values()) / k, 4),
-               chunks=locs)
+               npmi=round(npmi, 4), count=k, wcount=round(wpair[(a, b)], 4), n_docs=len(docs),
+               max_doc_share=round(max(docs.values()) / k, 4), chunks=locs, **_syntax(syn[(a, b)], cc))
+
+
+def _syntax(occ: list, cc) -> dict:
+    """Edge fields from a pair's short dependency paths: which verbs join them, how often negated or hedged."""
+    n = len(occ)
+    verbs = Counter(v for v, _, _ in occ if v)
+    out = {"syntactic": n, "verbs": dict(sorted(verbs.items(), key=lambda kv: (-kv[1], kv[0]))[:5]),
+           "negated_frac": round(sum(x[1] for x in occ) / n, 4) if n else 0.0,
+           "hedged_frac": round(sum(x[2] for x in occ) / n, 4) if n else 0.0}
+    if verbs:
+        (v, k), = sorted(verbs.items(), key=lambda kv: (-kv[1], kv[0]))[:1]
+        if k >= cc["label_min"] and k >= cc["label_share"] * sum(verbs.values()):
+            out["relation_label"] = v
+    return out
 
 
 # ---------- INFERRED / AMBIGUOUS: document similarity ----------

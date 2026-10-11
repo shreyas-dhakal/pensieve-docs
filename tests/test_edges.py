@@ -213,3 +213,28 @@ def test_pair_repeated_in_one_document_is_not_inferred(tmp_path):
     (e,) = [e for e in g["links"] if {e["source"], e["target"]} == {"concept_turbine", "concept_gearbox"}]
     assert e["relation"] == "co_occurs" and e["count"] == 6 and e["n_docs"] == 1 and e["max_doc_share"] == 1
     assert e["confidence"] == "AMBIGUOUS"
+
+
+def _pair_edge(tmp_path, sentence: str):
+    tmp_path.mkdir(exist_ok=True)
+    files = {f"d{d}.md": f"# Doc {d}\n\n## Costs\n\n{sentence}\n\n" + "".join(_FILLER.format(k) for k in range(4))
+             for d in range(2)}
+    cfg = config.load()
+    cfg["concepts"]["generic_zipf"] = 0  # "energy bill" is everyday English
+    g = _build_dir(tmp_path, files, cfg)
+    (e,) = [e for e in g["links"] if {e["source"], e["target"]} == {"concept_heat_pump", "concept_energy_bill"}]
+    return e
+
+
+def test_verb_between_concepts_labels_the_edge(tmp_path):
+    e = _pair_edge(tmp_path, "Heat pumps reduce energy bills.")
+    assert e["verbs"]["reduce"] >= 2 and e["relation_label"] == "reduce" and e["relation"] == "co_occurs"
+    assert e["syntactic"] == 2 and e["negated_frac"] == 0 and e["hedged_frac"] == 0
+
+
+def test_negated_and_hedged_links_weigh_less(tmp_path):
+    pos = _pair_edge(tmp_path / "pos", "Heat pumps reduce energy bills.")
+    neg = _pair_edge(tmp_path / "neg", "Heat pumps do not reduce energy bills.")
+    hedge = _pair_edge(tmp_path / "hedge", "Heat pumps may reduce energy bills.")
+    assert neg["negated_frac"] > 0 and neg["weight"] < pos["weight"] and neg["wcount"] < pos["wcount"]
+    assert hedge["hedged_frac"] > 0 and neg["weight"] < hedge["weight"] < pos["weight"]

@@ -15,6 +15,8 @@ DEFAULTS = {
         "max_per_doc": 25,      # cap MENTIONS edges per doc
         "merge_ratio": 0.9,     # difflib ratio to fold near-duplicate concepts
         "max_tokens": 4,        # longest noun phrase kept
+        "max_path": 4,          # concept pairs this many dependency arcs apart (or fewer) count as syntactically linked
+        "hedge_words": ["may", "might", "could", "possibly", "potentially", "suggest"],
         "generic_zipf": 4.6,    # drop concepts whose every word is this common in English (wordfreq Zipf); 0 = off
         "stop_concepts": [      # boilerplate headings / filler that should never become concepts (lemmatised, lowercase)
             "abstract", "introduction", "summary", "overview", "background", "method", "result", "discussion",
@@ -33,6 +35,11 @@ DEFAULTS = {
         "top_k": 5,
         "min_count": 2,         # pairs sharing fewer chunks are dropped as noise
         "npmi_threshold": 0.2,  # weaker positive associations -> AMBIGUOUS
+        "syntax_boost": 0.5,    # a shared chunk counts 1 + this when the pair is linked by a short parse path...
+        "negation_penalty": 0.7,  # ...times (1 - this) when that path is negated...
+        "hedge_penalty": 0.3,   # ...times (1 - this) when it is hedged ("may", "could"). All 0 = plain chunk counts
+        "label_share": 0.6,     # relation_label: the verb with at least this share of the pair's verbs...
+        "label_min": 2,         # ...and at least this many occurrences
         "min_docs_inferred": 2,  # pairs found in fewer documents -> AMBIGUOUS (unless the corpus is one document)
     },
     "hyperedge_min_docs": 3,
