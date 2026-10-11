@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 import networkx as nx
 
 # how interesting a cross-community edge of each type is
+WEIGHT = "confidence_score"  # edge field Louvain and PageRank use
 SURPRISE = {"cites": 1.0, "links_to": 1.0, "similar_to": 0.9, "co_occurs": 0.7, "conceptually_related_to": 0.3, "mentions": 0.5}
 
 
@@ -13,7 +14,7 @@ def to_nx(g, include_ambiguous=False) -> nx.Graph:
     for e in g.edges.values():
         if include_ambiguous or e["confidence"] != "AMBIGUOUS":
             # confidence_score, not raw weight: PMI / TF-IDF / cosine live on different scales
-            G.add_edge(e["source"], e["target"], weight=e["confidence_score"], relation=e["relation"])
+            G.add_edge(e["source"], e["target"], weight=e[WEIGHT], relation=e["relation"])
     return G
 
 

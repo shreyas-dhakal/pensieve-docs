@@ -5,6 +5,8 @@ Builds the graph, then reports
 - related docs: for each doc, the top 3 other docs by shared concepts (min TF-IDF weight, summed);
   how many share its topic, and how many it links to on Wikipedia (either direction)
 - the same for the similar_to edges
+- the same purities averaged over Louvain seeds, since one seed moves inverse purity by several points
+- co_occurs edges by tier, and how many join two concepts whose documents share a topic
 - concept count, and the most widespread concepts to eyeball for junk
 """
 import json
@@ -12,6 +14,9 @@ import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+from statistics import mean
+
+import networkx as nx
 
 from pensieve_docs import config
 from pensieve_docs.build import build
@@ -25,6 +30,50 @@ def idx_threshold():
     from pensieve_docs.related import MIN_SCORE
 
     return MIN_SCORE
+
+
+def purities(comm: dict) -> tuple[float, float, dict]:
+    """comm: community -> topics of its docs."""
+    n = sum(map(len, comm.values()))
+    by_topic = defaultdict(Counter)
+    for c, ts in comm.items():
+        for t in ts:
+            by_topic[t][c] += 1
+    return (sum(Counter(ts).most_common(1)[0][1] for ts in comm.values()) / n,
+            sum(cs.most_common(1)[0][1] for cs in by_topic.values()) / n, by_topic)
+
+
+def seed_communities(g: dict, docs: dict, topic: dict, seeds=range(10)) -> list[dict]:
+    """Rerun analyze.py's clustering (same graph, same weights) with other Louvain seeds."""
+    from pensieve_docs.analyze import WEIGHT, communities
+
+    kind = {x["id"]: x["kind"] for x in g["nodes"]}
+    G = nx.Graph()
+    G.add_nodes_from(k for k, v in kind.items() if v != "folder")
+    G.add_edges_from((e["source"], e["target"], {"weight": e[WEIGHT]}) for e in g["links"]
+                     if e["confidence"] != "AMBIGUOUS" and "folder" not in (kind[e["source"]], kind[e["target"]]))
+    out = []
+    for s in seeds:
+        cm = {x: i for i, c in enumerate(communities(G, seed=s)) for x in c}
+        comm = defaultdict(list)
+        for d, f in docs.items():
+            comm[cm[d]].append(topic[f])
+        out.append(comm)
+    return out
+
+
+def cooccur_topics(g: dict, docs: dict, topic: dict) -> dict:
+    """tier -> (edges, share whose two concepts have the same majority topic among the docs mentioning them)."""
+    ct = defaultdict(Counter)
+    for e in g["links"]:
+        if e["relation"] == "mentions":
+            ct[e["target"]][topic[docs[e["source"]]]] += 1
+    top = {c: t.most_common(1)[0][0] for c, t in ct.items()}
+    out = {}
+    for tier in ("INFERRED", "AMBIGUOUS"):
+        es = [e for e in g["links"] if e["relation"] == "co_occurs" and e["confidence"] == tier]
+        out[tier] = (len(es), sum(top.get(e["source"]) == top.get(e["target"]) for e in es) / max(len(es), 1))
+    return out
 
 
 def main(data: Path, out: Path):
@@ -42,12 +91,8 @@ def main(data: Path, out: Path):
     for d, f in docs.items():
         comm[nodes[d]["community"]].append(topic[f])
     n = len(docs)
-    purity = sum(Counter(ts).most_common(1)[0][1] for ts in comm.values()) / n
-    by_topic = defaultdict(Counter)
-    for c, ts in comm.items():
-        for t in ts:
-            by_topic[t][c] += 1
-    inverse = sum(cs.most_common(1)[0][1] for cs in by_topic.values()) / n
+    purity, inverse, by_topic = purities(comm)
+    seeded = [purities(c)[:2] for c in seed_communities(g, docs, topic)]
 
     # related docs by shared concepts (what a recall badge would show)
     w = defaultdict(dict)
@@ -99,6 +144,9 @@ def main(data: Path, out: Path):
 
     print(f"build: {stats['detected']} files -> {len(g['nodes'])} nodes, {len(g['links'])} edges in {secs:.1f}s")
     print(f"communities: {len(comm)} for {len(by_topic)} topics | purity {purity:.2f} | inverse purity {inverse:.2f}")
+    print(f"  over 10 Louvain seeds: purity {mean(p for p, _ in seeded):.3f} | inverse purity {mean(i for _, i in seeded):.3f}")
+    co = cooccur_topics(g, docs, topic)
+    print("co_occurs:", ", ".join(f"{t} {k} ({ok:.1%} same topic)" for t, (k, ok) in co.items()))
     print(f"related@{K} by concepts:  same topic {cp[0]:.0%}, wiki-linked {cp[1]:.0%} ({cp[2]} suggestions)")
     print(f"related@{K} by similar_to: same topic {sp[0]:.0%}, wiki-linked {sp[1]:.0%} ({sp[2]} suggestions)")
     print(f"Index.related (threshold {idx_threshold()}): {hits / (K * len(docs)):.0%} of slots filled, "
@@ -110,7 +158,7 @@ def main(data: Path, out: Path):
     print(f"concepts: {len(concepts)} ({sum(' ' not in c['norm'] for c in concepts)} single-word)")
     print("most widespread:", ", ".join(f"{c['label']}({c['doc_count']})" for c in concepts[:40]))
     print("cross-topic concept suggestions:", *cp[3][:12], sep="\n  ")
-    return {"purity": purity, "inverse_purity": inverse, "concept_p": cp[:2], "similar_p": sp[:2]}
+    return {"purity": purity, "inverse_purity": inverse, "cooccur": co, "concept_p": cp[:2], "similar_p": sp[:2]}
 
 
 if __name__ == "__main__":

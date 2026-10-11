@@ -6,3 +6,4 @@ pensieve-out/
 .archify/
 .DS_Store
 bench/data/
+bench/results/
