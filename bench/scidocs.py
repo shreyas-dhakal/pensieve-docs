@@ -2,11 +2,11 @@
 
     curl -L -o bench/data/scidocs.zip https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scidocs.zip
     unzip bench/data/scidocs.zip -d bench/data
-    HF_HUB_OFFLINE=1 uv run python bench/scidocs.py [n_queries]
+    HF_HUB_OFFLINE=1 uv run python bench/scidocs.py [n_queries] [offset]
 
 The query is a paper's title; relevant papers are ones it cites or that are co-read with it, 5 of ~30 judged per query.
 pensieve-docs compares all document pairs, so this ranks a sub-corpus: every paper judged for the first n queries
-(2933 papers for 100). Every method ranks the same pool, so they compare with each other, but the absolute numbers are
+(2933 papers for the first 100; pass an offset for another slice, e.g. to check settings tuned on the first). Every method ranks the same pool, so they compare with each other, but the absolute numbers are
 higher than full-corpus BEIR results.
 """
 import csv
@@ -29,12 +29,12 @@ def recall_at(rank: dict, relevant, k=100) -> float:
     return sum(rs) / len(rs)
 
 
-def main(n: int):
+def main(n: int, offset: int = 0):
     qrels = {}
     with open(DATA / "qrels" / "test.tsv") as f:
         for r in csv.DictReader(f, delimiter="\t"):
             qrels.setdefault(r["query-id"], {})[r["corpus-id"]] = int(r["score"])
-    qids = sorted(qrels)[:n]
+    qids = sorted(qrels)[offset:offset + n]
     pool = {d for q in qids for d in qrels[q]}
     titles = {}
     for line in open(DATA / "queries.jsonl"):
@@ -47,7 +47,7 @@ def main(n: int):
         if d["_id"] in pool:
             docs[d["_id"]] = f"{d['title']}\n\n{d['text']}"
 
-    folder, out = Path(f"bench/data/scidocs-{n}"), Path(f"bench/data/scidocs-{n}-out")
+    folder, out = Path(f"bench/data/scidocs-{offset}-{n}"), Path(f"bench/data/scidocs-{offset}-{n}-out")
     folder.mkdir(parents=True, exist_ok=True)
     for d, text in docs.items():
         p = folder / f"{d}.txt"
@@ -82,4 +82,4 @@ def main(n: int):
 
 
 if __name__ == "__main__":
-    main(int(sys.argv[1]) if len(sys.argv) > 1 else 100)
+    main(*(int(a) for a in sys.argv[1:3])) if len(sys.argv) > 1 else main(100)

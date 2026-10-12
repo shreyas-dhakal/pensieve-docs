@@ -57,10 +57,10 @@ from pensieve_docs.related import Index
 
 idx = Index("pensieve-out/graph.json")
 idx.related("thinking about a home battery for backup power", k=5)
-# [{"id", "label", "source_file", "score", "reasons": [{"concept", "where"}, ...]}, ...]
+# [{"id", "label", "source_file", "score", "bm25", "reasons": [{"concept", "where"}, ...]}, ...]
 ```
 
-A query matches the graph's known concepts in the text (surface words and lemmas, longest match first) and scores each document by the TF-IDF weight they share. A paragraph takes a few milliseconds once the spaCy model is loaded; a 30,000-character article takes about a third of a second.
+A query matches the graph's known concepts in the text (surface words and lemmas, longest match first) and scores each document by the TF-IDF weight they share (`score`, which `--min-score` applies to, and which gives the reasons). The documents that pass are ordered by reciprocal-rank fusion of that score with BM25 over lemmas (`bm25`, from the `bow.json` that build writes next to `graph.json`). The concept side counts in full only for queries with 40 or more known concepts, such as a whole document; a short query (a title has about 2) ranks mostly by BM25, which does much better on those. A paragraph takes a few milliseconds once the spaCy model is loaded; a 30,000-character article takes about a third of a second.
 
 ## Viewer
 
@@ -159,7 +159,7 @@ Pairs sharing fewer than `min_count` chunks, or with PMI at or below 0, are drop
 
 `broader` is $b$ when $P(b \mid a) = N_{ab}/N_a \ge 0.8$ and $P(a \mid b) < 0.8$, with plain chunk counts.
 
-Two documents' overlap is $S(d, d') = \sum_t \min(w_{d,t}, w_{d',t})$ over the concepts both mention, with $w$ their L2-normalised TF-IDF weights (`edges.overlap`). `related.py` ranks query results by the same sum, and `shares_concepts` has `confidence_score` = rubric$(S / \max S)$.
+Two documents' overlap is $S(d, d') = \sum_t \min(w_{d,t}, w_{d',t})$ over the concepts both mention, with $w$ their L2-normalised TF-IDF weights (`edges.overlap`). `related.py` gates query results by the same sum (and orders them with BM25, above), and `shares_concepts` has `confidence_score` = rubric$(S / \max S)$.
 
 Louvain and PageRank weigh edges by `confidence_score` (`analyze.WEIGHT`). Weighing by `strength` instead split topics into more communities on the benchmark (inverse purity 0.70 to 0.65), because every structural EXTRACTED edge then weighs 1 against NPMI values around 0.3 to 0.6.
 
@@ -266,18 +266,19 @@ It reports whether communities match topics, and whether each article's top 3 re
 | communities | 13 for 6 topics; each is one topic (purity 1.00), and topics split into subtopics such as mosquitoes and malaria (inverse purity 0.70; 0.69 averaged over 10 Louvain seeds, since a single seed moves it by several points) |
 | `co_occurs` | 2604 INFERRED and 804 AMBIGUOUS; 91% of each join two concepts whose documents share a topic |
 | score cut-off 0.2 | keeps 66% of suggestions, all of them on topic |
-| `Index.related` with each article's full text as the query | 99% same topic, 87% linked on Wikipedia |
+| `Index.related` with each article's full text as the query | 99% same topic, 86% linked on Wikipedia |
 
-`bench/compare.py` ranks related articles on the same corpus with standard baselines, and `bench/scidocs.py` does the same on [BEIR SCIDOCS](https://github.com/beir-cellar/beir) (paper title as the query, cited or co-read papers as relevant; first 100 queries, a 2933-paper pool):
+`bench/compare.py` ranks related articles on the same corpus with standard baselines, and `bench/scidocs.py` does the same on [BEIR SCIDOCS](https://github.com/beir-cellar/beir) (paper title as the query, cited or co-read papers as relevant; ~2900-paper pools of 100 queries each). The fusion weight was tuned on queries 0-99, so 100-199 are the honest check:
 
-| method | wiki MAP, same topic / Wikipedia-linked | SCIDOCS nDCG@10 | SCIDOCS Recall@100 |
+| method | wiki MAP, same topic / Wikipedia-linked | SCIDOCS nDCG@10, queries 0-99 | SCIDOCS nDCG@10, 100-199 |
 | --- | --- | ---: | ---: |
-| pensieve-docs `Index.related` | 0.952 / 0.888 | 0.193 | 0.277 |
-| TF-IDF cosine | 0.949 / 0.859 | 0.312 | 0.502 |
-| BM25 | 0.944 / 0.853 | 0.313 | 0.507 |
-| MiniLM (all-MiniLM-L6-v2) | 0.993 / 0.873 | 0.452 | 0.785 |
+| pensieve-docs `Index.related` (concepts + BM25) | 0.970 / 0.899 | 0.326 | 0.242 |
+| pensieve-docs, concepts only (before) | 0.952 / 0.888 | 0.193 | 0.118 |
+| TF-IDF cosine | 0.949 / 0.859 | 0.312 | 0.250 |
+| BM25 | 0.944 / 0.853 | 0.313 | 0.245 |
+| MiniLM (all-MiniLM-L6-v2) | 0.993 / 0.873 | 0.452 | 0.418 |
 
-On the easy wiki set the concept ranking holds its own. On SCIDOCS it is well behind plain BM25: a short title shares few of the 25 concepts kept per paper, so most papers score 0. Use embeddings or BM25 when ranking quality matters; the graph's value is the explained, located connections, not retrieval scores.
+On unseen titles pensieve-docs now ties BM25 and TF-IDF, and MiniLM is well ahead; on whole documents it ranks best on Wikipedia links. Use embeddings when ranking quality is what matters; the graph's value is the explained, located connections.
 
 Six unrelated topics make this an easy test. The weak spots are generic words that survive as concepts (`technique`, `output`, `characteristics`).
 

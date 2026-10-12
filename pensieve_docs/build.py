@@ -111,6 +111,9 @@ def build(folder: str | Path, cfg: dict, out: str | Path | None = None) -> dict:
             "built_at_commit": _git_head(root), "generator": "pensieve-docs 0.1.0",
             "similarity_method": cfg["similarity"]["method"]}
     output.write_atomic(out / "graph.json", json.dumps(output.graph_json(g, a, meta), indent=2, ensure_ascii=False))
+    # word counts per document, for BM25 in related.py (graph.json points at files, it does not hold their words)
+    bow = {r["rel"]: r["concepts"]["bow"] for r in records}
+    output.write_atomic(out / "bow.json", json.dumps(bow, sort_keys=True, ensure_ascii=False))
     stats["seconds"] = time.perf_counter() - t0
     output.write_atomic(out / "GRAPH_REPORT.md", output.report(g, a, stats, cfg))
     return {**stats, "nodes": len(g.nodes), "edges": len(g.edges), "hyperedges": len(g.hyperedges),
