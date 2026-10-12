@@ -9,7 +9,7 @@ DEFAULTS = {
     "chunk": {"max_chars": 4000},
     "concepts": {
         "spacy_model": "en_core_web_sm",
-        "extractors": ["pensieve_docs.concepts:extract"],  # dotted paths; see README "Extractor interface"
+        "extractors": ["pensieve_docs.concepts:extract"],  # dotted paths; see docs/technical.md "Extending"
         "min_docs": 2,          # concepts must appear in this many docs...
         "keep_top_single": 3,   # ...unless they are among the top N (by TF-IDF) of their doc
         "max_per_doc": 25,      # cap MENTIONS edges per doc
