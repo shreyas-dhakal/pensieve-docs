@@ -280,6 +280,22 @@ It reports whether communities match topics, and whether each article's top 3 re
 
 On unseen titles pensieve-docs now ties BM25 and TF-IDF, and MiniLM is well ahead; on whole documents it ranks best on Wikipedia links. Use embeddings when ranking quality is what matters; the graph's value is the explained, located connections.
 
+### Token savings for agents
+
+An agent that asks pensieve-docs first reads a few sections instead of every file. `bench/tokens.py` asks 10 questions about the wiki bench, each with the article that answers it, and counts what the agent would read (characters / 4):
+
+| what the agent reads | tokens per question | vs reading all 60 articles (~630k) | answer article reached |
+| --- | ---: | ---: | ---: |
+| `related` top 3, then only the sections its reasons point to | ~2,000 | **313x fewer** | 9 / 10 |
+| `related` top 3, then those 3 whole documents | ~32,600 | 19x fewer | 9 / 10 |
+| graph slice: best-matching nodes + 3 hops, as `graphify benchmark` measures | ~28,400 | 22x fewer | 10 / 10 |
+
+```bash
+uv run python bench/tokens.py
+```
+
+The miss is "how is malaria transmitted by mosquitoes": the top 3 are the Anopheles, mosquito and *P. falciparum* articles, and the Malaria article comes 4th. The graph slice always reaches the answer because it is broad: three hops cover about a fifth of the graph's nodes. And a slice holds labels, paths and line numbers, not text, so an agent still has to open the files after it. The `related` + sections path hands over the text itself. Whether those sections contain the exact sentence that answers the question is not checked, only that the right article was found. Pass `min_score=0` (CLI `--min-score 0`) for short questions: a few-word question rarely reaches the default 0.2 concept score.
+
 Six unrelated topics make this an easy test. The weak spots are generic words that survive as concepts (`technique`, `output`, `characteristics`).
 
 ## Known limits
