@@ -5,6 +5,7 @@ pensieve-docs reads a folder of documents and maps how they connect: which files
 Use it to:
 
 - **find related documents** for a file or a piece of text, with the reasons why
+- **ask the map**: what an idea connects to, how two ideas link up, and where each connection is written down
 - **save an AI agent's tokens**: the agent asks pensieve-docs where to look, then reads a few sections instead of every file
 - **see the big picture**: groups of related documents and the ideas that tie them together
 
@@ -58,7 +59,25 @@ idx = Index("pensieve-out/graph.json")
 idx.related("home battery for backup power", k=5)
 ```
 
-**3. Look at it** (optional)
+**3. Ask the map**
+
+```
+$ uv run pensieve-docs query "should we add a home battery for backup power"
+START backup power [concept, in 2 documents, ...] meetings/2024-06-review.md L5
+backup power --co_occurs--> grid outage [INFERRED 0.95] meetings/2024-06-review.md L5
+Battery Storage --mentions--> backup power [INFERRED 0.75] notes/battery-storage.md L3
+...
+$ uv run pensieve-docs path "heat pump" "net metering"
+$ uv run pensieve-docs explain "net metering"
+```
+
+- `query` starts at the ideas your question names and walks out along the strongest connections, stopping at `--budget` tokens (default 2000). `--dfs` follows one chain deep instead.
+- `path` shows the shortest chain of connections between two things.
+- `explain` shows one idea or document: where it appears and everything it connects to.
+
+Every line says which file and line it came from, so an agent can open just those lines. Name a document by its title or its path.
+
+**4. Look at it** (optional)
 
 ```bash
 uv sync --extra ui
@@ -88,6 +107,8 @@ We test it on 60 Wikipedia articles across six topics (coffee, jazz, malaria, ma
 
 **Finding related documents.** Of the top 3 related articles it suggests, 99% are on the same topic. On scientific papers searched by title, it is about as good as standard keyword search. AI embedding models (which need a model download) do better there.
 
+**Answer quality, LazyGraphRAG-style.** Following [Microsoft's LazyGraphRAG test](https://www.microsoft.com/en-us/research/blog/lazygraphrag-setting-a-new-standard-for-quality-and-cost/), an AI answered 20 questions from the text each method found and another AI judged the answers. On questions about one or two articles, pensieve-docs roughly ties keyword and AI-embedding search. On big-picture questions across many articles it loses (20 to 45% win rate), because it pulls text from a few documents rather than across topics. Picking text for an AI to answer from is not what it does best yet.
+
 **Grouping.** The groups it finds never mix topics. Some topics split into smaller groups, such as mosquitoes and malaria.
 
 To run the tests yourself:
@@ -96,6 +117,7 @@ To run the tests yourself:
 uv run python bench/fetch_wiki.py   # download the 60 articles
 uv run python bench/eval.py         # overall scores
 uv run python bench/tokens.py       # token savings
+uv run python bench/lazygraphrag.py # answer quality (uses the `claude` CLI and your Claude plan's usage)
 ```
 
 ## Limits

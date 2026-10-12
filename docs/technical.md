@@ -79,6 +79,14 @@ The settings, all in [`config.example.toml`](../config.example.toml):
 
 A query matches the graph's known concepts in the text (surface words and lemmas, longest match first) and scores each document by the TF-IDF weight they share (`score`, which `--min-score` applies to, and which gives the reasons). The documents that pass are ordered by reciprocal-rank fusion of that score with BM25 over lemmas (`bm25`, from the `bow.json` that build writes next to `graph.json`). The concept side counts in full only for queries with 40 or more known concepts, such as a whole document; a short query (a title has about 2) ranks mostly by BM25, which does much better on those. A paragraph takes a few milliseconds once the spaCy model is loaded; a 30,000-character article takes about a third of a second.
 
+## How `query`, `path` and `explain` work
+
+`query.Graph` extends `related.Index` and loads every edge except `contains` into a networkx graph. A name resolves to nodes in this order: a document's path; an exact id, label or concept `norm` (concept, then document, then section); known concepts in the text, ranked by count times IDF; a substring of node labels. Each edge has a cost of `1 + tier + (1 - confidence_score)`, with tier 0 for EXTRACTED, 1 for INFERRED and 2 for AMBIGUOUS.
+
+- `query` starts from up to 3 resolved nodes and goes breadth-first (or depth-first with `--dfs`), up to 6 hops out. It follows each node's 8 cheapest edges (`PER_NODE`) and stops when the next line would pass `--budget` tokens (characters / 4).
+- `path` is `nx.shortest_path` weighted by cost, so a short chain of strong edges beats an equally short chain of weak ones.
+- `explain` lists a node's edges by relation, cheapest first, 10 per relation, and names any other nodes the name matched.
+
 ## `graph.json`
 
 The file has the same shape as graphify's, so `networkx.node_link_graph(data, edges="links")` or a graphify-style viewer can load it:
@@ -203,6 +211,25 @@ uv run python bench/tokens.py
 The miss is "how is malaria transmitted by mosquitoes": the top 3 are the Anopheles, mosquito and *P. falciparum* articles, and the Malaria article comes 4th. The graph slice always reaches the answer because it is broad: three hops cover about a fifth of the graph's nodes. And a slice holds labels, paths and line numbers, not text, so an agent still has to open the files after it. The `related` + sections path hands over the text itself. Whether those sections contain the exact sentence that answers the question is not checked, only that the right article was found. Pass `min_score=0` (CLI `--min-score 0`) for short questions: a few-word question rarely reaches the default 0.2 concept score.
 
 Six unrelated topics make this an easy test. The weak spots are generic words that survive as concepts (`technique`, `output`, `characteristics`).
+
+### Answer quality (LazyGraphRAG method)
+
+`bench/lazygraphrag.py` follows the method of [Microsoft's LazyGraphRAG post](https://www.microsoft.com/en-us/research/blog/lazygraphrag-setting-a-new-standard-for-quality-and-cost/), scaled down. An LLM writes local questions (answered by one or two documents) and global ones (sensemaking across the corpus). Each condition retrieves context, and the same LLM answers from it. An LLM judge then compares answers pairwise on comprehensiveness, diversity, empowerment and relevance, in both orders. The wiki bench has 60 articles, 10 local + 10 global questions, and Sonnet through the `claude` CLI. Win rate of pensieve (`related` top 10 → cited sections → rest of those documents, up to 8K tokens) against each baseline; 50% is a draw:
+
+| vs | queries | comprehensiveness | diversity | empowerment | relevance |
+| --- | --- | ---: | ---: | ---: | ---: |
+| BM25 over chunks, 8K | local | 38% | 35% | 50% | 52% |
+| BM25 over chunks, 8K | global | 45% | 30% | 42% | 50% |
+| MiniLM over chunks, 8K | local | 42% | 30% | 52% | 57% |
+| MiniLM over chunks, 8K | global | 22% | 22% | 28% | 48% |
+| MiniLM over chunks, 64K | local | 65% | 75% | 62% | 40% |
+| MiniLM over chunks, 64K | global | 30% | 20% | 32% | 55% |
+
+pensieve ties chunk retrieval on local questions and loses on global ones: filling the budget from the top few documents gives less breadth than chunks drawn from across the corpus. With 20 questions, differences of about 10 points are noise. Unlike the post, there is no AP news corpus and no LazyGraphRAG, GraphRAG or RAPTOR conditions. Replies are cached in `<out>/llm-cache.json`, so an interrupted run resumes.
+
+```bash
+uv run python bench/lazygraphrag.py bench/data/wiki bench/data/out 10   # questions per class; the post used 50
+```
 
 ## Known limits
 

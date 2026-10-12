@@ -24,10 +24,30 @@ def main(argv=None):
     r.add_argument("-k", type=int, default=5, help="how many documents (default 5)")
     r.add_argument("--min-score", type=float, default=None, help="hide weaker matches (default 0.2)")
     r.add_argument("--json", action="store_true", help="print JSON instead of text")
+    q = sub.add_parser("query", help="walk the graph out from the nodes a question names")
+    q.add_argument("question")
+    q.add_argument("--budget", type=int, default=2000, help="stop after about this many tokens (default 2000)")
+    q.add_argument("--dfs", action="store_true", help="follow one chain deep instead of nearest connections first")
+    p = sub.add_parser("path", help="shortest chain of connections between two nodes")
+    p.add_argument("a")
+    p.add_argument("b")
+    e = sub.add_parser("explain", help="one node: what it is, where it appears, what it connects to")
+    e.add_argument("name")
+    for s in (q, p, e):
+        s.add_argument("--out", default="pensieve-out", help="directory holding graph.json (default: ./pensieve-out)")
     args = ap.parse_args(argv)
 
     if args.cmd == "related":
         return _related(ap, args)
+    if args.cmd in ("query", "path", "explain"):
+        if not (Path(args.out) / "graph.json").exists():
+            ap.error(f"no graph.json in {args.out}; run `pensieve-docs build <folder>` first")
+        from .query import Graph
+
+        g = Graph(Path(args.out) / "graph.json")
+        print({"query": lambda: g.query(args.question, args.budget, args.dfs),
+               "path": lambda: g.path(args.a, args.b), "explain": lambda: g.explain(args.name)}[args.cmd]())
+        return
 
     if args.cmd == "ui":
         out = Path(args.out)
